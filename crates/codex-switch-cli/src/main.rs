@@ -294,6 +294,20 @@ fn print_check(report: &CheckReport) {
     println!("Credential mode: {:?}", report.profile.credential_mode);
     println!("Status: {:?}", report.profile.health.status);
     println!("{}", report.detail);
+    println!("Preflight ready: {}", report.preflight.ready);
+    println!("{}", report.preflight.detail);
+    if !report.preflight.blockers.is_empty() {
+        println!("Blockers:");
+        for blocker in &report.preflight.blockers {
+            println!("- {blocker}");
+        }
+    }
+    if !report.preflight.warnings.is_empty() {
+        println!("Warnings:");
+        for warning in &report.preflight.warnings {
+            println!("- {warning}");
+        }
+    }
 }
 
 fn print_doctor(report: &DoctorReport) {

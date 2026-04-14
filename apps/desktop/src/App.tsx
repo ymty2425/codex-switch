@@ -113,6 +113,14 @@ type CheckReport = {
   detail: string;
   drifted: boolean;
   profile: ProfileMeta;
+  preflight: {
+    ready: boolean;
+    required_file_entries: number;
+    required_system_entries: number;
+    blockers: string[];
+    warnings: string[];
+    detail: string;
+  };
 };
 
 type RecoveryReport = {
@@ -197,7 +205,13 @@ export function App() {
   async function handleCheck(name: string) {
     try {
       const report = await invoke<CheckReport>("check_profile", { name });
-      setStatus(report.detail);
+      const summary = [
+        report.detail,
+        report.preflight.detail,
+        ...report.preflight.blockers.map((blocker) => `Blocker: ${blocker}`),
+        ...report.preflight.warnings.map((warning) => `Warning: ${warning}`),
+      ].join(" ");
+      setStatus(summary);
       await loadDashboard();
     } catch (err) {
       setError(String(err));

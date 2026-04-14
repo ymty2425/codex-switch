@@ -45,6 +45,7 @@ cargo test -p codex-switch-application
 - `doctor` 应暴露待恢复事务，`recover` 应恢复备份文件并清理事务残留
 - `doctor` 的 discovery trace 应正确区分 matched / missing_input / lookup_missed
 - `doctor` 的 switch probes 应报告数据目录写入、锁获取与同目录原子替换能力
+- `check` 应为目标 profile 输出 preflight blocker / warning，并在 system store 缺失时阻止 mixed profile 被判定为 ready
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI

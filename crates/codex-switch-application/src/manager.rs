@@ -101,6 +101,17 @@ pub struct CheckReport {
     pub profile: ProfileMeta,
     pub detail: String,
     pub drifted: bool,
+    pub preflight: ProfilePreflightReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfilePreflightReport {
+    pub ready: bool,
+    pub required_file_entries: usize,
+    pub required_system_entries: usize,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -461,10 +472,11 @@ impl ManagerService {
             )
         };
 
+        let preflight = self.build_profile_preflight(&snapshot, drifted);
         profile.health =
             ProfileHealth { status, detail: detail.clone(), checked_at: Some(Utc::now()) };
         self.vault.write_profile_meta(&profile)?;
-        Ok(CheckReport { profile, detail, drifted })
+        Ok(CheckReport { profile, detail, drifted, preflight })
     }
 
     pub fn sync_active_profile(&self) -> Result<ProfileMeta> {
@@ -1068,6 +1080,72 @@ impl ManagerService {
         }
     }
 
+    fn build_profile_preflight(
+        &self,
+        snapshot: &SecretSnapshot,
+        drifted: bool,
+    ) -> ProfilePreflightReport {
+        let probes = self.run_switch_probes();
+        let mut blockers = Vec::new();
+        let mut warnings = Vec::new();
+
+        if !probes.data_dir_write.ok {
+            blockers.push(probes.data_dir_write.detail.clone());
+        }
+        if !probes.lock_acquire.ok {
+            blockers.push(probes.lock_acquire.detail.clone());
+        }
+        if !probes.atomic_swap.ok {
+            blockers.push(probes.atomic_swap.detail.clone());
+        }
+
+        if !snapshot.system_records.is_empty() {
+            if let Err(error) = self.current_system_store() {
+                blockers.push(format!(
+                    "This profile requires {} system credential entry(s), but no system credential store is available: {error}",
+                    snapshot.system_records.len()
+                ));
+            }
+        }
+
+        if snapshot.file_entries.is_empty() {
+            warnings.push(
+                "This profile snapshot does not include any file-backed credential entries."
+                    .to_string(),
+            );
+        }
+
+        if drifted {
+            warnings.push(
+                "This active profile currently differs from the live session. Run sync before switching away if you want to keep the refreshed state."
+                    .to_string(),
+            );
+        }
+
+        let ready = blockers.is_empty();
+        let detail = if ready {
+            format!(
+                "Profile is ready to switch on this machine. It needs {} file entry and {} system entry.",
+                snapshot.file_entries.len(),
+                snapshot.system_records.len()
+            )
+        } else {
+            format!(
+                "Profile is not ready to switch on this machine because {} blocker(s) were found.",
+                blockers.len()
+            )
+        };
+
+        ProfilePreflightReport {
+            ready,
+            required_file_entries: snapshot.file_entries.len(),
+            required_system_entries: snapshot.system_records.len(),
+            blockers,
+            warnings,
+            detail,
+        }
+    }
+
     fn recent_audit_entries(&self, limit: usize) -> Result<Vec<String>> {
         let log = self.read_audit_log()?;
         let mut lines = log
@@ -1376,6 +1454,7 @@ mod tests {
 
     #[derive(Debug)]
     struct MockStore {
+        enabled: bool,
         available: Vec<SecretRecord>,
     }
 
@@ -1385,7 +1464,7 @@ mod tests {
         }
 
         fn is_available(&self) -> bool {
-            true
+            self.enabled
         }
 
         fn read(&self, refs: &[CredentialRef]) -> DomainResult<Vec<SecretRecord>> {
@@ -1437,13 +1516,31 @@ mod tests {
         registry: CredentialDiscoveryRegistry,
         detector_records: Vec<SecretRecord>,
     ) -> ManagerService {
+        manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            detector_records.clone(),
+            detector_records,
+            true,
+        )
+    }
+
+    fn manager_with_store_mode(
+        codex_home: PathBuf,
+        app_home: PathBuf,
+        registry: CredentialDiscoveryRegistry,
+        system_records: Vec<SecretRecord>,
+        detector_records: Vec<SecretRecord>,
+        enabled: bool,
+    ) -> ManagerService {
         let paths = PathResolver::discover(Some(codex_home), Some(app_home)).expect("paths");
         ManagerService::from_parts(
             paths,
             None,
             registry,
-            vec![Box::new(MockStore { available: detector_records.clone() })],
-            vec![Box::new(MockStore { available: detector_records })],
+            vec![Box::new(MockStore { enabled, available: system_records })],
+            vec![Box::new(MockStore { enabled, available: detector_records })],
         )
         .expect("manager")
     }
@@ -1543,6 +1640,92 @@ mod tests {
 
         let report = manager.check_profile("alpha").expect("report");
         assert!(report.drifted);
+    }
+
+    #[test]
+    fn check_profile_reports_preflight_ready_for_file_profile() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let report = manager.check_profile("alpha").expect("check");
+
+        assert!(report.preflight.ready);
+        assert!(report.preflight.blockers.is_empty());
+        assert_eq!(report.preflight.required_file_entries, 1);
+        assert_eq!(report.preflight.required_system_entries, 0);
+    }
+
+    #[test]
+    fn check_profile_reports_preflight_blocker_when_system_store_is_missing() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+
+        let writer = manager_with_store_mode(
+            codex_home.clone(),
+            app_home.clone(),
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let checker =
+            manager_with_store_mode(codex_home, app_home, registry, Vec::new(), Vec::new(), false);
+
+        let report = checker.check_profile("alpha").expect("check");
+
+        assert!(!report.preflight.ready);
+        assert_eq!(report.preflight.required_system_entries, 1);
+        assert!(
+            report
+                .preflight
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("system credential store"))
+        );
     }
 
     #[test]
