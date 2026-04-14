@@ -24,10 +24,12 @@
 
 ### 系统凭证探测仍然保守
 
-适配层已经存在，但当前 detector 还没有内置官方 Keychain/CredMan/Secret Service 条目扫描规则。结果是：
+当前已经有基于 registry 的启发式规则发现，但它仍然是保守模式，不是“全平台全条目自动枚举”。结果是：
 
 - 文件型登录态已可用
-- 系统凭证型或 mixed 模式的完整自动发现仍需后续增强
+- 常见 `service/account` 组合可进入 mixed-mode 探测
+- 未被 registry 覆盖的官方条目仍可能漏检
+- Windows Credential Manager 的真实命名方式仍需在 Windows 环境里补齐验证
 
 ### 安全擦除只能最佳努力
 

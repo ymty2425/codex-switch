@@ -195,9 +195,11 @@ fn print_profiles(profiles: &[ProfileMeta]) {
     for profile in profiles {
         let default_marker = if profile.is_default { "*" } else { " " };
         println!(
-            "{default_marker} {}  {}  {:?}  {}",
+            "{default_marker} {}  {}  {:?}  {:?}  {:?}  {}",
             profile.name,
             profile.account_label_masked,
+            profile.source_type,
+            profile.credential_mode,
             profile.health.status,
             profile.created_at.to_rfc3339()
         );
@@ -207,8 +209,11 @@ fn print_profiles(profiles: &[ProfileMeta]) {
 fn print_current(current: &CurrentStatus) {
     println!("Live account: {}", current.live_session.account_label_masked);
     println!("Live fingerprint: {}", current.live_session.account_fingerprint);
+    println!("Live source: {:?}", current.live_session.source_type);
+    println!("Live credential mode: {:?}", current.live_session.credential_mode);
     if let Some(profile) = &current.active_profile {
         println!("Active profile: {}", profile.name);
+        println!("Active profile mode: {:?}", profile.credential_mode);
     } else {
         println!("Active profile: none");
     }
@@ -216,6 +221,7 @@ fn print_current(current: &CurrentStatus) {
 
 fn print_check(report: &CheckReport) {
     println!("Profile: {}", report.profile.name);
+    println!("Credential mode: {:?}", report.profile.credential_mode);
     println!("Status: {:?}", report.profile.health.status);
     println!("{}", report.detail);
 }

@@ -24,6 +24,7 @@
 - `PathResolver`：发现 `CODEX_HOME` 和管理器数据目录
 - `FileCredentialStore`：读取与写入 `auth.json`
 - `inspect`：从 `auth.json`、JWT claim、`account_id` 推断账号标识和来源
+- `CredentialDiscoveryRegistry`：根据 `email`、`sub`、`account_id` 线索展开系统凭证发现规则
 - `GlobalSwitchLock`：进程级文件锁
 - `LocalProfileVault`：本地 vault 存储与导出加密
 - `MacKeychainCredentialStore`
@@ -84,6 +85,8 @@
 - `auth.json`
 - 系统凭证引用与实际 secret 记录
 
+当 detector 命中系统凭证规则时，`DetectedSession` 会被标记为 `mixed`，并把发现到的系统条目一起纳入 live fingerprint。
+
 不会复制：
 
 - `logs`
@@ -116,15 +119,18 @@
 
 - 本地路径：`~/Library/Application Support/codex-switch`
 - 已实现 Keychain 读写包装
+- detector 会基于 registry 用 `service/account` 模板尝试读取 Keychain 条目，不做全量扫描
 
 ### Windows
 
 - 本地路径：`%AppData%\codex-switch`
 - 已提供 `WindowsCredentialStore` 适配入口
 - 当前非 Windows build 下只返回“此平台不可用”
+- detector registry 已接通，但完整条目命名仍需在真实 Windows 环境补验证
 
 ### Linux
 
 - 本地路径：`$XDG_DATA_HOME/codex-switch` 或 `~/.local/share/codex-switch`
 - 优先使用 `secret-tool`
 - 若无 Secret Service，可继续使用本地口令加密 vault 保存 profile
+- detector 会按 registry 规则尝试 `service/account` 组合，不依赖全量 keyring 枚举

@@ -12,6 +12,9 @@ pub struct AuthInspection {
     pub source_type: SourceType,
     pub account_label_masked: String,
     pub account_fingerprint: String,
+    pub email: Option<String>,
+    pub subject: Option<String>,
+    pub account_id: Option<String>,
     pub last_refresh_at: Option<DateTime<Utc>>,
 }
 
@@ -40,6 +43,11 @@ struct JwtClaims {
 
 pub fn inspect_auth_json(contents: &str) -> Result<AuthInspection, SwitchError> {
     let document: AuthDocument = serde_json::from_str(contents)?;
+    let token_claims = document
+        .tokens
+        .as_ref()
+        .and_then(|tokens| tokens.id_token.as_deref())
+        .and_then(extract_claims_from_id_token);
     let source_type = if document.openai_api_key.is_some()
         || matches!(document.auth_mode.as_deref(), Some("api_key"))
     {
@@ -60,14 +68,16 @@ pub fn inspect_auth_json(contents: &str) -> Result<AuthInspection, SwitchError> 
         SourceType::Unknown => AuthMode::Unknown,
     };
 
-    let raw_account = if let Some(tokens) = &document.tokens {
-        if let Some(id_token) = &tokens.id_token {
-            extract_identity_from_id_token(id_token)
-                .or_else(|| tokens.account_id.clone())
-                .unwrap_or_else(|| "unknown".to_string())
-        } else {
-            tokens.account_id.clone().unwrap_or_else(|| "unknown".to_string())
-        }
+    let email = token_claims.as_ref().and_then(|claims| claims.email.clone());
+    let subject = token_claims.as_ref().and_then(|claims| claims.sub.clone());
+    let account_id = document.tokens.as_ref().and_then(|tokens| tokens.account_id.clone());
+
+    let raw_account = if let Some(email) = &email {
+        email.clone()
+    } else if let Some(account_id) = &account_id {
+        account_id.clone()
+    } else if let Some(subject) = &subject {
+        subject.clone()
     } else if let Some(api_key) = &document.openai_api_key {
         api_key.clone()
     } else {
@@ -85,17 +95,19 @@ pub fn inspect_auth_json(contents: &str) -> Result<AuthInspection, SwitchError> 
         source_type,
         account_label_masked: mask_account_label(&raw_account),
         account_fingerprint: fingerprint_account(&raw_account),
+        email,
+        subject,
+        account_id,
         last_refresh_at,
     })
 }
 
-fn extract_identity_from_id_token(token: &str) -> Option<String> {
+fn extract_claims_from_id_token(token: &str) -> Option<JwtClaims> {
     let mut parts = token.split('.');
     let _header = parts.next()?;
     let payload = parts.next()?;
     let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let claims: JwtClaims = serde_json::from_slice(&decoded).ok()?;
-    claims.email.or(claims.sub)
+    serde_json::from_slice(&decoded).ok()
 }
 
 #[cfg(test)]
@@ -121,5 +133,29 @@ mod tests {
         let inspection = inspect_auth_json(&json).expect("inspection");
         assert_eq!(inspection.source_type, SourceType::ChatGpt);
         assert_eq!(inspection.account_label_masked, "te***@example.com");
+        assert_eq!(inspection.email.as_deref(), Some("teammate@example.com"));
+        assert_eq!(inspection.subject.as_deref(), Some("acct_123"));
+        assert_eq!(inspection.account_id.as_deref(), Some("acct_123"));
+    }
+
+    #[test]
+    fn inspect_auth_json_keeps_account_id_for_discovery_without_email_claim() {
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"acct_456"}"#);
+        let json = format!(
+            r#"{{
+                "auth_mode":"chatgpt",
+                "tokens": {{
+                    "id_token":"aaa.{payload}.ccc",
+                    "refresh_token":"refresh",
+                    "account_id":"acct_456"
+                }}
+            }}"#
+        );
+
+        let inspection = inspect_auth_json(&json).expect("inspection");
+
+        assert_eq!(inspection.account_label_masked, "acct_***56");
+        assert_eq!(inspection.subject.as_deref(), Some("acct_456"));
+        assert_eq!(inspection.account_id.as_deref(), Some("acct_456"));
     }
 }

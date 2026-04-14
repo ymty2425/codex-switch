@@ -83,6 +83,13 @@ textarea {
   gap: 12px;
 }
 
+.stat-meta,
+.profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .stat-label {
   color: rgba(245, 242, 235, 0.58);
   text-transform: uppercase;
@@ -182,6 +189,12 @@ button:hover {
   background: rgba(243, 181, 98, 0.14);
   color: #f3b562;
   font-size: 0.82rem;
+}
+
+.badge.subtle {
+  min-width: auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(245, 242, 235, 0.86);
 }
 
 .muted,

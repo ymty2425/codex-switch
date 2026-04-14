@@ -11,8 +11,9 @@ use codex_switch_domain::{
     SwitchPhase, SwitchTransaction, traits::ProfileVault as _,
 };
 use codex_switch_platform::{
-    AuthJsonSessionDetector, FileCredentialStore, GlobalSwitchLock, LinuxKeyringCredentialStore,
-    LocalProfileVault, MacKeychainCredentialStore, PathResolver, WindowsCredentialStore,
+    AuthJsonSessionDetector, CredentialDiscoveryRegistry, FileCredentialStore, GlobalSwitchLock,
+    LinuxKeyringCredentialStore, LocalProfileVault, MacKeychainCredentialStore, PathResolver,
+    WindowsCredentialStore,
     fs_secure::{atomic_write, ensure_dir, list_json_files, secure_delete},
     locator::AppPaths,
 };
@@ -81,7 +82,11 @@ impl ManagerService {
     pub fn new(options: ManagerOptions) -> Result<Self> {
         let paths = PathResolver::discover(options.codex_home_override, options.data_dir_override)?;
         let file_store = FileCredentialStore::new(paths.codex_home.clone());
-        let detector = AuthJsonSessionDetector::new(file_store.clone());
+        let detector = AuthJsonSessionDetector::with_registry(
+            file_store.clone(),
+            CredentialDiscoveryRegistry::default(),
+            default_system_stores(),
+        );
         let vault = LocalProfileVault::new(
             paths.profiles_dir.clone(),
             paths.vault_dir.clone(),
@@ -93,11 +98,7 @@ impl ManagerService {
             detector,
             file_store,
             vault,
-            system_stores: vec![
-                Box::new(MacKeychainCredentialStore),
-                Box::new(LinuxKeyringCredentialStore),
-                Box::new(WindowsCredentialStore),
-            ],
+            system_stores: default_system_stores(),
             local_encryption_enabled: options.local_passphrase.is_some(),
         };
         service.ensure_layout()?;
@@ -661,6 +662,14 @@ impl ManagerService {
             index += 1;
         }
     }
+}
+
+fn default_system_stores() -> Vec<Box<dyn OfficialCredentialStore>> {
+    vec![
+        Box::new(MacKeychainCredentialStore),
+        Box::new(LinuxKeyringCredentialStore),
+        Box::new(WindowsCredentialStore),
+    ]
 }
 
 #[cfg(test)]
