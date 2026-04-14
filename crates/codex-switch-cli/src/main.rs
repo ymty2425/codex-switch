@@ -2,7 +2,7 @@ use std::{env, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use codex_switch_application::{
-    CheckReport, CurrentStatus, ManagerOptions, ManagerService, SaveProfileRequest,
+    CheckReport, CurrentStatus, DoctorReport, ManagerOptions, ManagerService, SaveProfileRequest,
     UseProfileRequest,
 };
 use codex_switch_domain::{ProfileMeta, Result, SwitchError};
@@ -28,6 +28,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Detect,
+    Doctor,
     Save {
         name: String,
         #[arg(long)]
@@ -90,6 +91,15 @@ fn run() -> Result<()> {
 
     match cli.command {
         Commands::Detect => print_result(cli.json, "detect", &manager.detect()?),
+        Commands::Doctor => {
+            let report = manager.doctor_report()?;
+            if cli.json {
+                print_result(true, "doctor", &report)
+            } else {
+                print_doctor(&report);
+                Ok(())
+            }
+        }
         Commands::Save { name, note, default } => {
             let profile =
                 manager.save_profile(SaveProfileRequest { name, note, make_default: default })?;
@@ -226,6 +236,34 @@ fn print_check(report: &CheckReport) {
     println!("Credential mode: {:?}", report.profile.credential_mode);
     println!("Status: {:?}", report.profile.health.status);
     println!("{}", report.detail);
+}
+
+fn print_doctor(report: &DoctorReport) {
+    println!("OS: {}", report.operating_system);
+    println!("CODEX_HOME: {}", report.codex_home);
+    println!("Data dir: {}", report.data_dir);
+    println!(
+        "Auth file: {}  exists={} readable={}",
+        report.auth_file.path, report.auth_file.exists, report.auth_file.readable
+    );
+    println!("Discovery rules: {}", report.discovery_rule_count);
+    println!("Live session detected: {}", report.live_session.detected);
+    println!("{}", report.live_session.detail);
+    if let Some(account) = &report.live_session.account_label_masked {
+        println!("Detected account: {account}");
+    }
+    for store in &report.stores {
+        println!(
+            "Store {}  supported={} available={}  {}",
+            store.name, store.supported, store.available, store.detail
+        );
+    }
+    if !report.recommended_actions.is_empty() {
+        println!("Recommendations:");
+        for action in &report.recommended_actions {
+            println!("- {action}");
+        }
+    }
 }
 
 #[cfg(test)]

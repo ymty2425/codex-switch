@@ -36,6 +36,7 @@
 
 `crates/codex-switch-application` 负责用例编排：
 
+- `doctor_report`
 - `save_profile`
 - `list_profiles`
 - `current_status`
@@ -54,6 +55,7 @@
 - 自定义 discovery rules 配置
 - 当前绑定状态
 - 当前 live 会话与 active profile 的同步状态
+- 平台就绪度诊断输出
 - 切换事务日志
 - 审计日志
 

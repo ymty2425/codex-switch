@@ -25,6 +25,7 @@ cargo test -p codex-switch-platform
 - `auth.json` 解析与账号推断
 - 系统凭证 registry 模板展开与 mixed-mode 探测
 - `config.json` 自定义 discovery rules 的加载与保留
+- `doctor` 对缺失 auth 文件和 discovery rule 数量的诊断
 - 本地 vault 的导出导入加密回环
 
 ### Application

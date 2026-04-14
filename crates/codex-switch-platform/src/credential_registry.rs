@@ -27,6 +27,11 @@ impl CredentialDiscoveryRegistry {
     }
 
     #[must_use]
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    #[must_use]
     pub fn standard_rules() -> Vec<CredentialDiscoveryRule> {
         vec![
             CredentialDiscoveryRule {

@@ -1,5 +1,5 @@
 use codex_switch_application::{
-    CheckReport, CurrentStatus, ManagerOptions, ManagerService, SaveProfileRequest,
+    CheckReport, CurrentStatus, DoctorReport, ManagerOptions, ManagerService, SaveProfileRequest,
     UseProfileRequest,
 };
 use codex_switch_domain::ProfileMeta;
@@ -10,6 +10,7 @@ use std::path::PathBuf;
 #[derive(Debug, Serialize)]
 struct DashboardData {
     current: CurrentStatus,
+    doctor: DoctorReport,
     profiles: Vec<ProfileMeta>,
     logs: String,
 }
@@ -60,6 +61,7 @@ fn manager() -> CommandResult<ManagerService> {
 fn load_dashboard(manager: &ManagerService) -> CommandResult<DashboardData> {
     Ok(DashboardData {
         current: manager.current_status().map_err(|error| error.to_string())?,
+        doctor: manager.doctor_report().map_err(|error| error.to_string())?,
         profiles: manager.list_profiles().map_err(|error| error.to_string())?,
         logs: manager.read_audit_log().map_err(|error| error.to_string())?,
     })
