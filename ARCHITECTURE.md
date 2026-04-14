@@ -52,6 +52,7 @@
 - profile 元数据仓储
 - 默认 profile 配置
 - 当前绑定状态
+- 当前 live 会话与 active profile 的同步状态
 - 切换事务日志
 - 审计日志
 

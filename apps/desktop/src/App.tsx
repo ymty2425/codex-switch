@@ -30,6 +30,10 @@ type CurrentStatus = {
     last_refresh_at?: string | null;
   };
   active_profile?: ProfileMeta | null;
+  sync_state: {
+    status: "no_active_profile" | "in_sync" | "needs_sync" | "unknown";
+    detail: string;
+  };
 };
 
 type DashboardData = {
@@ -148,8 +152,21 @@ export function App() {
           <div className="stat-value">
             {dashboard?.current.active_profile?.name ?? "None"}
           </div>
-          <button className="primary" onClick={() => void handleSync()}>
-            Sync Active Profile
+          <div className={`sync-pill sync-${dashboard?.current.sync_state.status ?? "unknown"}`}>
+            {dashboard?.current.sync_state.status ?? "unknown"}
+          </div>
+          <p className="sync-detail">
+            {dashboard?.current.sync_state.detail ??
+              "No active profile is currently bound to the live session."}
+          </p>
+          <button
+            className="primary"
+            disabled={!dashboard?.current.active_profile}
+            onClick={() => void handleSync()}
+          >
+            {dashboard?.current.sync_state.status === "needs_sync"
+              ? "Sync Refreshed Session"
+              : "Sync Active Profile"}
           </button>
         </div>
       </section>

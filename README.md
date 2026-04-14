@@ -9,6 +9,7 @@
 - 列出、查看当前会话、切换、健康检查、同步、重命名、删除 profile
 - 将 profile 导出为口令加密包，并重新导入
 - 在切换前自动备份当前会话，切换后做指纹校验，失败时自动回滚
+- 主动判断当前 live 会话是否已经偏离 active profile，并提示是否需要执行 `sync`
 - 提供 Rust CLI 和极简 Tauri 桌面端壳子，共用同一套后端服务
 
 ## 重要边界
@@ -69,6 +70,7 @@ npm --workspace apps/desktop run tauri dev
 当前 UI 覆盖：
 
 - 当前账号展示
+- 当前会话是否需要同步的状态提示
 - profile 列表
 - 保存当前账号
 - 切换 profile

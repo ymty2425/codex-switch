@@ -90,6 +90,39 @@ textarea {
   gap: 8px;
 }
 
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sync-in_sync {
+  background: rgba(137, 240, 202, 0.12);
+  color: #89f0ca;
+}
+
+.sync-needs_sync {
+  background: rgba(255, 207, 112, 0.14);
+  color: #ffcf70;
+}
+
+.sync-no_active_profile,
+.sync-unknown {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(245, 242, 235, 0.8);
+}
+
+.sync-detail {
+  margin: 0;
+  color: rgba(245, 242, 235, 0.76);
+  line-height: 1.5;
+}
+
 .stat-label {
   color: rgba(245, 242, 235, 0.58);
   text-transform: uppercase;
@@ -163,6 +196,12 @@ button {
 
 button:hover {
   transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .primary {

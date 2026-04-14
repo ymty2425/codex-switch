@@ -46,6 +46,22 @@ pub struct CurrentStatus {
     pub live_session: DetectedSession,
     pub active_profile: Option<ProfileMeta>,
     pub binding: CurrentBinding,
+    pub sync_state: CurrentSyncState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentSyncStatus {
+    NoActiveProfile,
+    InSync,
+    NeedsSync,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CurrentSyncState {
+    pub status: CurrentSyncStatus,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,7 +176,9 @@ impl ManagerService {
         let active_profile = binding
             .active_profile_id
             .and_then(|profile_id| self.read_profile_by_id(profile_id).ok());
-        Ok(CurrentStatus { live_session, active_profile, binding })
+        let sync_state =
+            self.build_current_sync_state(&live_session, &binding, active_profile.as_ref());
+        Ok(CurrentStatus { live_session, active_profile, binding, sync_state })
     }
 
     pub fn use_profile(&self, request: UseProfileRequest) -> Result<ProfileMeta> {
@@ -449,6 +467,51 @@ impl ManagerService {
 
     fn write_binding(&self, binding: &CurrentBinding) -> Result<()> {
         atomic_write(&self.paths.current_binding_file, &serde_json::to_vec_pretty(binding)?)
+    }
+
+    fn build_current_sync_state(
+        &self,
+        live_session: &DetectedSession,
+        binding: &CurrentBinding,
+        active_profile: Option<&ProfileMeta>,
+    ) -> CurrentSyncState {
+        if binding.active_profile_id.is_none() {
+            return CurrentSyncState {
+                status: CurrentSyncStatus::NoActiveProfile,
+                detail: "No active profile is currently bound to the live session.".to_string(),
+            };
+        }
+
+        if active_profile.is_none() {
+            return CurrentSyncState {
+                status: CurrentSyncStatus::Unknown,
+                detail: "The current binding points to a profile that is no longer available."
+                    .to_string(),
+            };
+        }
+
+        let baseline = binding
+            .last_sync_fingerprint
+            .as_deref()
+            .or(binding.live_fingerprint_at_bind.as_deref());
+
+        match baseline {
+            Some(fingerprint) if fingerprint == live_session.live_fingerprint => CurrentSyncState {
+                status: CurrentSyncStatus::InSync,
+                detail: "The active profile is synced with the current live session.".to_string(),
+            },
+            Some(_) => CurrentSyncState {
+                status: CurrentSyncStatus::NeedsSync,
+                detail:
+                    "The live session has changed since the active profile was last synced. Run sync to capture refreshed credentials."
+                        .to_string(),
+            },
+            None => CurrentSyncState {
+                status: CurrentSyncStatus::Unknown,
+                detail: "The active profile is bound, but no sync baseline is available yet."
+                    .to_string(),
+            },
+        }
     }
 
     fn read_config(&self) -> Result<AppConfig> {
@@ -796,6 +859,81 @@ mod tests {
 
         let report = manager.check_profile("alpha").expect("report");
         assert!(report.drifted);
+    }
+
+    #[test]
+    fn current_status_marks_active_profile_as_needing_sync_after_live_refresh() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+        manager
+            .use_profile(UseProfileRequest { name: "alpha".to_string(), make_default: false })
+            .expect("use");
+
+        fs::write(
+            codex_home.join("auth.json"),
+            sample_auth("acct-alpha-refreshed", "2026-04-13T04:00:00Z"),
+        )
+        .expect("mutate");
+
+        let current = manager.current_status().expect("current");
+
+        assert_eq!(current.sync_state.status, CurrentSyncStatus::NeedsSync);
+        assert!(current.sync_state.detail.contains("sync"));
+    }
+
+    #[test]
+    fn current_status_returns_to_in_sync_after_syncing_active_profile() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+        manager
+            .use_profile(UseProfileRequest { name: "alpha".to_string(), make_default: false })
+            .expect("use");
+
+        fs::write(
+            codex_home.join("auth.json"),
+            sample_auth("acct-alpha-refreshed", "2026-04-13T05:00:00Z"),
+        )
+        .expect("mutate");
+        manager.sync_active_profile().expect("sync");
+
+        let current = manager.current_status().expect("current");
+
+        assert_eq!(current.sync_state.status, CurrentSyncStatus::InSync);
+        assert!(current.sync_state.detail.contains("synced"));
     }
 
     #[test]
