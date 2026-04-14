@@ -126,7 +126,32 @@ pub struct DoctorReport {
     pub discovery_rule_count: usize,
     pub live_session: DoctorLiveSessionStatus,
     pub stores: Vec<codex_switch_platform::StoreDiagnostic>,
+    pub recovery: RecoveryStatus,
     pub recommended_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingTransactionSummary {
+    pub txn_id: String,
+    pub started_at: chrono::DateTime<Utc>,
+    pub phase: SwitchPhase,
+    pub rollback_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecoveryStatus {
+    pub pending_count: usize,
+    pub rollback_required_count: usize,
+    pub transactions: Vec<PendingTransactionSummary>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecoveryReport {
+    pub recovered_count: usize,
+    pub removed_count: usize,
+    pub transactions: Vec<PendingTransactionSummary>,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -466,8 +491,9 @@ impl ManagerService {
             },
         };
         let stores = default_store_diagnostics();
+        let recovery = self.inspect_recovery_status()?;
         let recommended_actions =
-            self.build_doctor_recommendations(auth_file_exists, &live_session, &stores);
+            self.build_doctor_recommendations(auth_file_exists, &live_session, &stores, &recovery);
 
         Ok(DoctorReport {
             operating_system: std::env::consts::OS.to_string(),
@@ -481,8 +507,43 @@ impl ManagerService {
             discovery_rule_count: self.discovery_rule_count,
             live_session,
             stores,
+            recovery,
             recommended_actions,
         })
+    }
+
+    pub fn recover_pending_transactions(&self) -> Result<RecoveryReport> {
+        self.ensure_layout()?;
+        let _guard = GlobalSwitchLock::acquire(self.lock_path())?;
+        let transactions = self.read_pending_transactions()?;
+        let summaries = transactions.iter().map(Self::summarize_transaction).collect::<Vec<_>>();
+        let mut recovered_count = 0usize;
+        let mut removed_count = 0usize;
+
+        for txn in &transactions {
+            if txn.rollback_required {
+                self.rollback_transaction(txn)?;
+                self.append_audit(
+                    "recover",
+                    &format!("Recovered interrupted switch {}", txn.txn_id),
+                )?;
+                recovered_count += 1;
+            }
+            self.delete_transaction_artifacts(txn.txn_id)?;
+            removed_count += 1;
+        }
+
+        let detail = if removed_count == 0 {
+            "No interrupted switch transactions were waiting for recovery.".to_string()
+        } else if recovered_count == removed_count {
+            format!("Recovered and cleared {removed_count} interrupted switch transaction(s).")
+        } else {
+            format!(
+                "Cleared {removed_count} interrupted switch transaction(s), including {recovered_count} rollback restoration(s)."
+            )
+        };
+
+        Ok(RecoveryReport { recovered_count, removed_count, transactions: summaries, detail })
     }
 
     pub fn export_diagnostic_bundle(&self, output: Option<&Path>) -> Result<PathBuf> {
@@ -732,6 +793,7 @@ impl ManagerService {
         auth_file_exists: bool,
         live_session: &DoctorLiveSessionStatus,
         stores: &[codex_switch_platform::StoreDiagnostic],
+        recovery: &RecoveryStatus,
     ) -> Vec<String> {
         let mut recommendations = Vec::new();
 
@@ -760,6 +822,13 @@ impl ManagerService {
             "If your official service/account names differ from the defaults, add credential_discovery_rules to config.json."
                 .to_string(),
         );
+
+        if recovery.pending_count > 0 {
+            recommendations.push(
+                "Interrupted switch state was found. Run recover before saving or switching profiles again."
+                    .to_string(),
+            );
+        }
 
         recommendations
     }
@@ -899,9 +968,7 @@ impl ManagerService {
     }
 
     fn recover_interrupted_transactions(&self) -> Result<()> {
-        for path in list_json_files(&self.paths.tx_dir)? {
-            let contents = fs::read_to_string(&path)?;
-            let txn: SwitchTransaction = serde_json::from_str(&contents)?;
+        for txn in self.read_pending_transactions()? {
             if txn.rollback_required {
                 self.rollback_transaction(&txn)?;
                 self.append_audit(
@@ -912,6 +979,46 @@ impl ManagerService {
             self.delete_transaction_artifacts(txn.txn_id)?;
         }
         Ok(())
+    }
+
+    fn inspect_recovery_status(&self) -> Result<RecoveryStatus> {
+        let transactions = self.read_pending_transactions()?;
+        let rollback_required_count =
+            transactions.iter().filter(|txn| txn.rollback_required).count();
+        let detail = if transactions.is_empty() {
+            "No interrupted switch transactions are waiting for recovery.".to_string()
+        } else {
+            format!(
+                "{} interrupted switch transaction(s) are waiting for cleanup or rollback.",
+                transactions.len()
+            )
+        };
+
+        Ok(RecoveryStatus {
+            pending_count: transactions.len(),
+            rollback_required_count,
+            transactions: transactions.iter().map(Self::summarize_transaction).collect(),
+            detail,
+        })
+    }
+
+    fn read_pending_transactions(&self) -> Result<Vec<SwitchTransaction>> {
+        let mut transactions: Vec<SwitchTransaction> = Vec::new();
+        for path in list_json_files(&self.paths.tx_dir)? {
+            let contents = fs::read_to_string(&path)?;
+            transactions.push(serde_json::from_str(&contents)?);
+        }
+        transactions.sort_by_key(|txn| txn.started_at);
+        Ok(transactions)
+    }
+
+    fn summarize_transaction(txn: &SwitchTransaction) -> PendingTransactionSummary {
+        PendingTransactionSummary {
+            txn_id: txn.txn_id.to_string(),
+            started_at: txn.started_at,
+            phase: txn.phase,
+            rollback_required: txn.rollback_required,
+        }
     }
 
     fn backup_current_files(&self, relative_paths: &[String], txn_id: Uuid) -> Result<()> {
@@ -1576,6 +1683,97 @@ mod tests {
         assert!(!contents.contains("refresh-acct-alpha"));
         assert!(!contents.contains("access-acct-alpha"));
         assert!(!contents.contains("\"contents\""));
+    }
+
+    #[test]
+    fn doctor_report_surfaces_pending_recovery_transactions() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::create_dir_all(app_home.join("tx")).expect("tx_dir");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        let live = manager.detect().expect("live");
+        let txn = SwitchTransaction {
+            txn_id: Uuid::new_v4(),
+            source_profile_id: None,
+            source_live_fingerprint: live.live_fingerprint,
+            target_profile_id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            backup_paths: vec!["auth.json".to_string()],
+            backup_system_entries: Vec::new(),
+            backup_system_records: Vec::new(),
+            phase: SwitchPhase::AppliedFiles,
+            rollback_required: true,
+        };
+        fs::write(
+            app_home.join("tx").join(format!("{}.json", txn.txn_id)),
+            serde_json::to_vec_pretty(&txn).expect("txn json"),
+        )
+        .expect("write txn");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert_eq!(report.recovery.pending_count, 1);
+        assert_eq!(report.recovery.rollback_required_count, 1);
+        assert!(report.recommended_actions.iter().any(|action| action.contains("recover")));
+    }
+
+    #[test]
+    fn recover_pending_transactions_restores_auth_file_and_cleans_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        let backup_auth = sample_auth("acct-alpha", "2026-04-13T00:00:00Z");
+        let switched_auth = sample_auth("acct-beta", "2026-04-13T01:00:00Z");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), &backup_auth).expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        let live = manager.detect().expect("live");
+        fs::write(codex_home.join("auth.json"), &switched_auth).expect("mutate auth");
+
+        let txn_id = Uuid::new_v4();
+        let backup_root = app_home.join("tx").join(txn_id.to_string()).join("backup");
+        fs::create_dir_all(&backup_root).expect("backup root");
+        fs::write(backup_root.join("auth.json"), &backup_auth).expect("backup auth");
+        let txn = SwitchTransaction {
+            txn_id,
+            source_profile_id: None,
+            source_live_fingerprint: live.live_fingerprint,
+            target_profile_id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            backup_paths: vec!["auth.json".to_string()],
+            backup_system_entries: Vec::new(),
+            backup_system_records: Vec::new(),
+            phase: SwitchPhase::AppliedFiles,
+            rollback_required: true,
+        };
+        fs::write(
+            app_home.join("tx").join(format!("{}.json", txn.txn_id)),
+            serde_json::to_vec_pretty(&txn).expect("txn json"),
+        )
+        .expect("write txn");
+
+        let report = manager.recover_pending_transactions().expect("recover");
+
+        assert_eq!(report.recovered_count, 1);
+        assert!(!app_home.join("tx").join(format!("{}.json", txn.txn_id)).exists());
+        assert!(!app_home.join("tx").join(txn.txn_id.to_string()).exists());
+        assert_eq!(fs::read_to_string(codex_home.join("auth.json")).expect("auth"), backup_auth);
     }
 
     #[test]

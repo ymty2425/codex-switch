@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use clap::{Parser, Subcommand};
 use codex_switch_application::{
     CheckReport, CurrentStatus, DoctorReport, LiveSessionSummary, ManagerOptions, ManagerService,
-    SaveProfileRequest, UseProfileRequest,
+    RecoveryReport, SaveProfileRequest, UseProfileRequest,
 };
 use codex_switch_domain::{ProfileMeta, Result, SwitchError};
 use secrecy::SecretString;
@@ -33,6 +33,7 @@ enum Commands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    Recover,
     Save {
         name: String,
         #[arg(long)]
@@ -118,6 +119,15 @@ fn run() -> Result<()> {
                 print_result(true, "bundle", &serde_json::json!({ "bundle": bundle_path }))
             } else {
                 println!("{}", bundle_path.display());
+                Ok(())
+            }
+        }
+        Commands::Recover => {
+            let report = manager.recover_pending_transactions()?;
+            if cli.json {
+                print_result(true, "recover", &report)
+            } else {
+                print_recover(&report);
                 Ok(())
             }
         }
@@ -306,10 +316,42 @@ fn print_doctor(report: &DoctorReport) {
             store.name, store.supported, store.available, store.detail
         );
     }
+    println!(
+        "Pending transactions: {}  rollback_required={}",
+        report.recovery.pending_count, report.recovery.rollback_required_count
+    );
+    println!("{}", report.recovery.detail);
+    for txn in &report.recovery.transactions {
+        println!(
+            "Transaction {}  phase={:?} rollback_required={} started_at={}",
+            txn.txn_id,
+            txn.phase,
+            txn.rollback_required,
+            txn.started_at.to_rfc3339()
+        );
+    }
     if !report.recommended_actions.is_empty() {
         println!("Recommendations:");
         for action in &report.recommended_actions {
             println!("- {action}");
+        }
+    }
+}
+
+fn print_recover(report: &RecoveryReport) {
+    println!("Recovered: {}", report.recovered_count);
+    println!("Removed transactions: {}", report.removed_count);
+    println!("{}", report.detail);
+    if !report.transactions.is_empty() {
+        println!("Transactions:");
+        for txn in &report.transactions {
+            println!(
+                "- {}  phase={:?} rollback_required={} started_at={}",
+                txn.txn_id,
+                txn.phase,
+                txn.rollback_required,
+                txn.started_at.to_rfc3339()
+            );
         }
     }
 }

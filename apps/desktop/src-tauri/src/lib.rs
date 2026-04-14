@@ -1,6 +1,6 @@
 use codex_switch_application::{
-    CheckReport, CurrentStatus, DoctorReport, ManagerOptions, ManagerService, SaveProfileRequest,
-    UseProfileRequest,
+    CheckReport, CurrentStatus, DoctorReport, ManagerOptions, ManagerService, RecoveryReport,
+    SaveProfileRequest, UseProfileRequest,
 };
 use codex_switch_domain::ProfileMeta;
 use secrecy::SecretString;
@@ -165,6 +165,11 @@ fn export_diagnostic_bundle(payload: ExportDiagnosticPayload) -> CommandResult<S
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn recover_pending_transactions() -> CommandResult<RecoveryReport> {
+    manager()?.recover_pending_transactions().map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -180,7 +185,8 @@ pub fn run() {
             set_default_profile,
             export_profile,
             import_profile,
-            export_diagnostic_bundle
+            export_diagnostic_bundle,
+            recover_pending_transactions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
