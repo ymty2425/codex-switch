@@ -1,0 +1,10 @@
+/target
+/node_modules
+/dist
+/.DS_Store
+/apps/desktop/dist
+/apps/desktop/node_modules
+/apps/desktop/src-tauri/target
+/.env
+/.idea
+/.vscode

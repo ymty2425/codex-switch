@@ -1,0 +1,231 @@
+import { FormEvent, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+
+type HealthStatus = "healthy" | "drifted" | "invalid" | "missing" | "unknown";
+
+type ProfileMeta = {
+  id: string;
+  name: string;
+  account_label_masked: string;
+  account_fingerprint: string;
+  is_default: boolean;
+  note?: string | null;
+  health: {
+    status: HealthStatus;
+    detail: string;
+  };
+  created_at: string;
+  last_synced_at?: string | null;
+  last_used_at?: string | null;
+};
+
+type CurrentStatus = {
+  live_session: {
+    account_label_masked: string;
+    account_fingerprint: string;
+    source_type: string;
+    last_refresh_at?: string | null;
+  };
+  active_profile?: ProfileMeta | null;
+};
+
+type DashboardData = {
+  current: CurrentStatus;
+  profiles: ProfileMeta[];
+  logs: string;
+};
+
+type CheckReport = {
+  detail: string;
+  drifted: boolean;
+  profile: ProfileMeta;
+};
+
+export function App() {
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [status, setStatus] = useState<string>("Loading current session...");
+  const [error, setError] = useState<string | null>(null);
+  const [saveName, setSaveName] = useState("");
+  const [saveNote, setSaveNote] = useState("");
+  const [saveDefault, setSaveDefault] = useState(false);
+
+  async function loadDashboard() {
+    try {
+      setError(null);
+      const data = await invoke<DashboardData>("dashboard");
+      setDashboard(data);
+      setStatus("Dashboard refreshed.");
+    } catch (err) {
+      setError(String(err));
+      setStatus("Unable to load the current session.");
+    }
+  }
+
+  useEffect(() => {
+    void loadDashboard();
+  }, []);
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const data = await invoke<DashboardData>("save_profile", {
+        payload: {
+          name: saveName,
+          note: saveNote || null,
+          makeDefault: saveDefault,
+        },
+      });
+      setDashboard(data);
+      setStatus(`Saved profile "${saveName}".`);
+      setSaveName("");
+      setSaveNote("");
+      setSaveDefault(false);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleUse(name: string) {
+    try {
+      const data = await invoke<DashboardData>("use_profile", {
+        payload: { name, makeDefault: false },
+      });
+      setDashboard(data);
+      setStatus(`Switched to "${name}".`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleSync() {
+    try {
+      const data = await invoke<DashboardData>("sync_active_profile");
+      setDashboard(data);
+      setStatus("Synced the active profile.");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleCheck(name: string) {
+    try {
+      const report = await invoke<CheckReport>("check_profile", { name });
+      setStatus(report.detail);
+      await loadDashboard();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  return (
+    <main className="shell">
+      <section className="hero">
+        <div>
+          <p className="eyebrow">Codex Local Session Manager</p>
+          <h1>Keep official Codex sessions organized across local profiles.</h1>
+          <p className="hero-copy">
+            Save the current official login state, switch profiles with rollback
+            protection, and sync refreshed tokens back into the right profile.
+          </p>
+        </div>
+        <div className="hero-card">
+          <div className="stat-label">Current Account</div>
+          <div className="stat-value">
+            {dashboard?.current.live_session.account_label_masked ?? "Unavailable"}
+          </div>
+          <div className="stat-label">Active Profile</div>
+          <div className="stat-value">
+            {dashboard?.current.active_profile?.name ?? "None"}
+          </div>
+          <button className="primary" onClick={() => void handleSync()}>
+            Sync Active Profile
+          </button>
+        </div>
+      </section>
+
+      <section className="grid">
+        <article className="panel">
+          <div className="panel-header">
+            <h2>Save Current Session</h2>
+            <button className="ghost" onClick={() => void loadDashboard()}>
+              Refresh
+            </button>
+          </div>
+          <form className="save-form" onSubmit={handleSave}>
+            <label>
+              Profile name
+              <input
+                value={saveName}
+                onChange={(event) => setSaveName(event.target.value)}
+                placeholder="personal"
+                required
+              />
+            </label>
+            <label>
+              Note
+              <textarea
+                value={saveNote}
+                onChange={(event) => setSaveNote(event.target.value)}
+                placeholder="What is this account for?"
+                rows={3}
+              />
+            </label>
+            <label className="checkbox">
+              <input
+                checked={saveDefault}
+                onChange={(event) => setSaveDefault(event.target.checked)}
+                type="checkbox"
+              />
+              Mark as default profile
+            </label>
+            <button className="primary" type="submit">
+              Save Profile
+            </button>
+          </form>
+          <p className="status">{status}</p>
+          {error ? <p className="error">{error}</p> : null}
+        </article>
+
+        <article className="panel">
+          <div className="panel-header">
+            <h2>Profiles</h2>
+            <span>{dashboard?.profiles.length ?? 0} saved</span>
+          </div>
+          <div className="profile-list">
+            {dashboard?.profiles.map((profile) => (
+              <div className="profile-card" key={profile.id}>
+                <div className="profile-topline">
+                  <h3>{profile.name}</h3>
+                  {profile.is_default ? <span className="badge">Default</span> : null}
+                </div>
+                <p className="muted">{profile.account_label_masked}</p>
+                <p className={`health health-${profile.health.status}`}>
+                  {profile.health.status}: {profile.health.detail}
+                </p>
+                <div className="actions">
+                  <button className="primary" onClick={() => void handleUse(profile.name)}>
+                    Use
+                  </button>
+                  <button className="ghost" onClick={() => void handleCheck(profile.name)}>
+                    Health Check
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!dashboard?.profiles.length ? (
+              <p className="muted">No profiles yet. Save the current account to get started.</p>
+            ) : null}
+          </div>
+        </article>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Logs</h2>
+          <span>Audit trail</span>
+        </div>
+        <pre className="logs">{dashboard?.logs || "No audit log entries yet."}</pre>
+      </section>
+    </main>
+  );
+}

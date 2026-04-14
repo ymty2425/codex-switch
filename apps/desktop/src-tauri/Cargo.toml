@@ -1,0 +1,19 @@
+[package]
+name = "codex-switch-desktop"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "codex_switch_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.3" }
+
+[dependencies]
+codex-switch-application = { path = "../../../crates/codex-switch-application" }
+codex-switch-domain = { path = "../../../crates/codex-switch-domain" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2.1.1" }
+tauri-plugin-dialog = { version = "2.0.1" }

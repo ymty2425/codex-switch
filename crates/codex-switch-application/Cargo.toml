@@ -1,0 +1,15 @@
+[package]
+name = "codex-switch-application"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+codex-switch-domain = { path = "../codex-switch-domain" }
+codex-switch-platform = { path = "../codex-switch-platform" }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }

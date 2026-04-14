@@ -1,0 +1,21 @@
+[package]
+name = "codex-switch-platform"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes-gcm-siv = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+codex-switch-domain = { path = "../codex-switch-domain" }
+directories = { workspace = true }
+fs4 = { workspace = true }
+pbkdf2 = { workspace = true }
+rand = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+which = { workspace = true }
