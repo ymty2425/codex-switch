@@ -5,10 +5,11 @@ use std::{
 };
 
 use chrono::Utc;
+use codex_switch_domain::session::mask_account_label;
 use codex_switch_domain::{
-    CurrentBinding, DetectedSession, HealthStatus, OfficialCredentialStore, ProfileHealth,
-    ProfileId, ProfileMeta, Result, SecretRecord, SecretSnapshot, SessionDetector, SwitchError,
-    SwitchPhase, SwitchTransaction, traits::ProfileVault as _,
+    AuthMode, CurrentBinding, DetectedSession, HealthStatus, OfficialCredentialStore,
+    ProfileHealth, ProfileId, ProfileMeta, Result, SecretRecord, SecretSnapshot, SessionDetector,
+    SwitchError, SwitchPhase, SwitchTransaction, traits::ProfileVault as _,
 };
 use codex_switch_platform::{
     AuthJsonSessionDetector, CredentialDiscoveryRegistry, CredentialDiscoveryRule,
@@ -43,10 +44,39 @@ pub struct UseProfileRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CurrentStatus {
-    pub live_session: DetectedSession,
+    pub live_session: LiveSessionSummary,
     pub active_profile: Option<ProfileMeta>,
     pub binding: CurrentBinding,
     pub sync_state: CurrentSyncState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactedFileEntry {
+    pub relative_path: String,
+    pub permissions: Option<u32>,
+    pub byte_length: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactedSystemEntry {
+    pub service: String,
+    pub account_label_masked: String,
+    pub label: Option<String>,
+    pub masked_value_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveSessionSummary {
+    pub codex_home: String,
+    pub auth_mode: AuthMode,
+    pub account_label_masked: String,
+    pub account_fingerprint: String,
+    pub source_type: codex_switch_domain::SourceType,
+    pub credential_mode: codex_switch_domain::CredentialMode,
+    pub file_entries: Vec<RedactedFileEntry>,
+    pub system_entries: Vec<RedactedSystemEntry>,
+    pub last_refresh_at: Option<chrono::DateTime<Utc>>,
+    pub live_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -99,6 +129,17 @@ pub struct DoctorReport {
     pub recommended_actions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticBundle {
+    pub schema_version: u32,
+    pub generated_at: chrono::DateTime<Utc>,
+    pub local_encryption_enabled: bool,
+    pub doctor: DoctorReport,
+    pub current: Option<CurrentStatus>,
+    pub profiles: Vec<ProfileMeta>,
+    pub audit_log_tail: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct AppConfig {
     default_profile_id: Option<ProfileId>,
@@ -127,6 +168,8 @@ impl std::fmt::Debug for ManagerService {
 }
 
 impl ManagerService {
+    const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION: u32 = 1;
+
     pub fn new(options: ManagerOptions) -> Result<Self> {
         let paths = PathResolver::discover(options.codex_home_override, options.data_dir_override)?;
         let registry = Self::load_discovery_registry(&paths.config_file)?;
@@ -174,6 +217,10 @@ impl ManagerService {
 
     pub fn detect(&self) -> Result<DetectedSession> {
         self.detector.detect()
+    }
+
+    pub fn detect_report(&self) -> Result<LiveSessionSummary> {
+        self.detect().map(|session| Self::summarize_detected(&session))
     }
 
     pub fn save_profile(&self, request: SaveProfileRequest) -> Result<ProfileMeta> {
@@ -229,7 +276,12 @@ impl ManagerService {
             .and_then(|profile_id| self.read_profile_by_id(profile_id).ok());
         let sync_state =
             self.build_current_sync_state(&live_session, &binding, active_profile.as_ref());
-        Ok(CurrentStatus { live_session, active_profile, binding, sync_state })
+        Ok(CurrentStatus {
+            live_session: Self::summarize_detected(&live_session),
+            active_profile,
+            binding,
+            sync_state,
+        })
     }
 
     pub fn use_profile(&self, request: UseProfileRequest) -> Result<ProfileMeta> {
@@ -433,6 +485,34 @@ impl ManagerService {
         })
     }
 
+    pub fn export_diagnostic_bundle(&self, output: Option<&Path>) -> Result<PathBuf> {
+        self.ensure_layout()?;
+        let doctor = self.doctor_report()?;
+        let current = self.current_status().ok();
+        let profiles = self.list_profiles()?;
+        let bundle = DiagnosticBundle {
+            schema_version: Self::DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
+            generated_at: Utc::now(),
+            local_encryption_enabled: self.local_encryption_enabled,
+            doctor,
+            current,
+            profiles,
+            audit_log_tail: self.recent_audit_entries(50)?,
+        };
+
+        let destination = output.map(PathBuf::from).unwrap_or_else(|| {
+            let timestamp = bundle.generated_at.format("%Y%m%dT%H%M%SZ");
+            self.paths.exports_dir.join(format!("diagnostic-bundle-{timestamp}.json"))
+        });
+        let payload = serde_json::to_vec_pretty(&bundle)?;
+        atomic_write(&destination, &payload)?;
+        self.append_audit(
+            "bundle",
+            &format!("Exported diagnostic bundle to {}", destination.display()),
+        )?;
+        Ok(destination)
+    }
+
     pub fn rename_profile(&self, old_name: &str, new_name: &str) -> Result<ProfileMeta> {
         if self.find_profile_by_name_optional(new_name)?.is_some() {
             return Err(SwitchError::Conflict(format!(
@@ -615,6 +695,38 @@ impl ManagerService {
         }
     }
 
+    fn summarize_detected(session: &DetectedSession) -> LiveSessionSummary {
+        LiveSessionSummary {
+            codex_home: session.codex_home.clone(),
+            auth_mode: session.auth_mode,
+            account_label_masked: session.account_label_masked.clone(),
+            account_fingerprint: session.account_fingerprint.clone(),
+            source_type: session.source_type,
+            credential_mode: session.credential_mode,
+            file_entries: session
+                .file_entries
+                .iter()
+                .map(|entry| RedactedFileEntry {
+                    relative_path: entry.relative_path.clone(),
+                    permissions: entry.permissions,
+                    byte_length: entry.contents.len(),
+                })
+                .collect(),
+            system_entries: session
+                .system_entries
+                .iter()
+                .map(|entry| RedactedSystemEntry {
+                    service: entry.reference.service.clone(),
+                    account_label_masked: mask_account_label(&entry.reference.account),
+                    label: entry.reference.label.clone(),
+                    masked_value_hint: entry.masked_value_hint.clone(),
+                })
+                .collect(),
+            last_refresh_at: session.last_refresh_at,
+            live_fingerprint: session.live_fingerprint.clone(),
+        }
+    }
+
     fn build_doctor_recommendations(
         &self,
         auth_file_exists: bool,
@@ -650,6 +762,20 @@ impl ManagerService {
         );
 
         recommendations
+    }
+
+    fn recent_audit_entries(&self, limit: usize) -> Result<Vec<String>> {
+        let log = self.read_audit_log()?;
+        let mut lines = log
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if lines.len() > limit {
+            lines = lines.split_off(lines.len() - limit);
+        }
+        Ok(lines)
     }
 
     fn read_config(&self) -> Result<AppConfig> {
@@ -1354,6 +1480,102 @@ mod tests {
             CredentialDiscoveryRegistry::standard_rules().len() + 1
         );
         assert_eq!(report.stores.len(), 3);
+    }
+
+    #[test]
+    fn current_status_serialization_redacts_live_auth_contents() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+
+        let current = manager.current_status().expect("current");
+        let json = serde_json::to_string(&current).expect("json");
+
+        assert!(!json.contains("refresh-acct-alpha"));
+        assert!(!json.contains("access-acct-alpha"));
+        assert!(!json.contains("\"contents\""));
+        assert!(json.contains("\"byte_length\""));
+    }
+
+    #[test]
+    fn detect_report_masks_system_entry_accounts() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_registry(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+                name: "custom-openai".to_string(),
+                source_type: Some(SourceType::ChatGpt),
+                service: "custom-openai".to_string(),
+                account: "person@example.com".to_string(),
+                label: Some("Desktop Session".to_string()),
+            }]),
+            vec![SecretRecord {
+                reference: CredentialRef {
+                    service: "custom-openai".to_string(),
+                    account: "person@example.com".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                },
+                secret: SecretString::new("custom-secret-token".into()),
+            }],
+        );
+
+        let report = manager.detect_report().expect("report");
+        let json = serde_json::to_string(&report).expect("json");
+
+        assert!(!json.contains("person@example.com"));
+        assert!(json.contains("pe***@example.com"));
+        assert!(!json.contains("custom-secret-token"));
+    }
+
+    #[test]
+    fn export_diagnostic_bundle_writes_redacted_json() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: Some("personal".to_string()),
+                make_default: true,
+            })
+            .expect("save");
+
+        let bundle_path = manager.export_diagnostic_bundle(None).expect("bundle");
+        let contents = fs::read_to_string(&bundle_path).expect("bundle contents");
+
+        assert!(bundle_path.starts_with(app_home.join("exports")));
+        assert!(contents.contains("\"doctor\""));
+        assert!(contents.contains("\"profiles\""));
+        assert!(!contents.contains("refresh-acct-alpha"));
+        assert!(!contents.contains("access-acct-alpha"));
+        assert!(!contents.contains("\"contents\""));
     }
 
     #[test]

@@ -40,6 +40,8 @@ cargo test -p codex-switch-application
 - active profile 的 drift 检测
 - `current` 对 active profile 漂移后的 `needs_sync` 状态判断
 - 设置默认 profile 不应隐式切换 live session
+- `detect/current` 的序列化输出不应带出原始 `auth.json` 内容
+- 脱敏诊断包导出不能带出 access token / refresh token
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI

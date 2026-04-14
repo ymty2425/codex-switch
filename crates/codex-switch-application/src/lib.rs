@@ -1,7 +1,7 @@
 pub mod manager;
 
 pub use manager::{
-    CheckReport, CurrentStatus, CurrentSyncState, CurrentSyncStatus, DoctorLiveSessionStatus,
-    DoctorPathStatus, DoctorReport, ManagerOptions, ManagerService, SaveProfileRequest,
-    UseProfileRequest,
+    CheckReport, CurrentStatus, CurrentSyncState, CurrentSyncStatus, DiagnosticBundle,
+    DoctorLiveSessionStatus, DoctorPathStatus, DoctorReport, LiveSessionSummary, ManagerOptions,
+    ManagerService, RedactedFileEntry, RedactedSystemEntry, SaveProfileRequest, UseProfileRequest,
 };

@@ -52,6 +52,12 @@ struct ImportProfilePayload {
     passphrase: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportDiagnosticPayload {
+    output: Option<PathBuf>,
+}
+
 type CommandResult<T> = std::result::Result<T, String>;
 
 fn manager() -> CommandResult<ManagerService> {
@@ -151,6 +157,14 @@ fn import_profile(payload: ImportProfilePayload) -> CommandResult<DashboardData>
     load_dashboard(&manager)
 }
 
+#[tauri::command]
+fn export_diagnostic_bundle(payload: ExportDiagnosticPayload) -> CommandResult<String> {
+    manager()?
+        .export_diagnostic_bundle(payload.output.as_deref())
+        .map(|path| path.display().to_string())
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -165,7 +179,8 @@ pub fn run() {
             delete_profile,
             set_default_profile,
             export_profile,
-            import_profile
+            import_profile,
+            export_diagnostic_bundle
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

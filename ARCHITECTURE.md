@@ -37,6 +37,7 @@
 `crates/codex-switch-application` 负责用例编排：
 
 - `doctor_report`
+- `detect_report`
 - `save_profile`
 - `list_profiles`
 - `current_status`
@@ -46,6 +47,7 @@
 - `rename_profile`
 - `delete_profile`
 - `export_profile`
+- `export_diagnostic_bundle`
 - `import_profile`
 
 这层同时管理：
@@ -56,6 +58,7 @@
 - 当前绑定状态
 - 当前 live 会话与 active profile 的同步状态
 - 平台就绪度诊断输出
+- 对 CLI / Tauri 暴露的脱敏 live session 摘要
 - 切换事务日志
 - 审计日志
 
@@ -123,6 +126,16 @@ manager 启动时会先加载标准规则，再把自定义规则追加进去。
 - `payload_b64`
 
 当前使用 `PBKDF2-SHA256 + AES-256-GCM-SIV`。
+
+## 脱敏输出
+
+应用层不会把 `DetectedSession.file_entries[*].contents` 直接暴露给 CLI 的 `detect/current` 输出或桌面端 dashboard。
+
+对外改用脱敏摘要：
+
+- 文件条目只保留相对路径、权限和字节数
+- 系统凭证条目只保留 `service`、脱敏后的 `account`、`label` 和 masked hint
+- 诊断包只包含 `doctor`、脱敏后的当前状态、profile 元数据和审计日志尾部
 
 ## 当前平台差异
 
