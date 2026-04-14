@@ -43,6 +43,7 @@ cargo test -p codex-switch-application
 - `detect/current` 的序列化输出不应带出原始 `auth.json` 内容
 - 脱敏诊断包导出不能带出 access token / refresh token
 - `doctor` 应暴露待恢复事务，`recover` 应恢复备份文件并清理事务残留
+- `doctor` 的 discovery trace 应正确区分 matched / missing_input / lookup_missed
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI

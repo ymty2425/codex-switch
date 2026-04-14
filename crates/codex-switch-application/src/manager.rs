@@ -13,9 +13,11 @@ use codex_switch_domain::{
 };
 use codex_switch_platform::{
     AuthJsonSessionDetector, CredentialDiscoveryRegistry, CredentialDiscoveryRule,
-    FileCredentialStore, GlobalSwitchLock, LinuxKeyringCredentialStore, LocalProfileVault,
-    MacKeychainCredentialStore, PathResolver, WindowsCredentialStore, default_store_diagnostics,
+    CredentialDiscoveryTraceEntry, CredentialDiscoveryTraceStatus, FileCredentialStore,
+    GlobalSwitchLock, LinuxKeyringCredentialStore, LocalProfileVault, MacKeychainCredentialStore,
+    PathResolver, WindowsCredentialStore, default_store_diagnostics,
     fs_secure::{atomic_write, ensure_dir, list_json_files, secure_delete},
+    inspect::inspect_auth_json,
     locator::AppPaths,
 };
 use secrecy::SecretString;
@@ -125,9 +127,20 @@ pub struct DoctorReport {
     pub auth_file: DoctorPathStatus,
     pub discovery_rule_count: usize,
     pub live_session: DoctorLiveSessionStatus,
+    pub discovery_trace: DiscoveryTraceReport,
     pub stores: Vec<codex_switch_platform::StoreDiagnostic>,
     pub recovery: RecoveryStatus,
     pub recommended_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryTraceReport {
+    pub matched_count: usize,
+    pub missing_input_count: usize,
+    pub lookup_missed_count: usize,
+    pub blocked_count: usize,
+    pub entries: Vec<CredentialDiscoveryTraceEntry>,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -175,6 +188,7 @@ struct AppConfig {
 pub struct ManagerService {
     paths: AppPaths,
     detector: AuthJsonSessionDetector,
+    discovery_registry: CredentialDiscoveryRegistry,
     file_store: FileCredentialStore,
     vault: LocalProfileVault,
     system_stores: Vec<Box<dyn OfficialCredentialStore>>,
@@ -218,7 +232,7 @@ impl ManagerService {
         let file_store = FileCredentialStore::new(paths.codex_home.clone());
         let detector = AuthJsonSessionDetector::with_registry(
             file_store.clone(),
-            registry,
+            registry.clone(),
             detector_system_stores,
         );
         let vault = LocalProfileVault::new(
@@ -230,6 +244,7 @@ impl ManagerService {
         let service = Self {
             paths,
             detector,
+            discovery_registry: registry,
             file_store,
             vault,
             system_stores,
@@ -491,9 +506,15 @@ impl ManagerService {
             },
         };
         let stores = default_store_diagnostics();
+        let discovery_trace = self.build_discovery_trace();
         let recovery = self.inspect_recovery_status()?;
-        let recommended_actions =
-            self.build_doctor_recommendations(auth_file_exists, &live_session, &stores, &recovery);
+        let recommended_actions = self.build_doctor_recommendations(
+            auth_file_exists,
+            &live_session,
+            &discovery_trace,
+            &stores,
+            &recovery,
+        );
 
         Ok(DoctorReport {
             operating_system: std::env::consts::OS.to_string(),
@@ -506,6 +527,7 @@ impl ManagerService {
             },
             discovery_rule_count: self.discovery_rule_count,
             live_session,
+            discovery_trace,
             stores,
             recovery,
             recommended_actions,
@@ -792,6 +814,7 @@ impl ManagerService {
         &self,
         auth_file_exists: bool,
         live_session: &DoctorLiveSessionStatus,
+        discovery_trace: &DiscoveryTraceReport,
         stores: &[codex_switch_platform::StoreDiagnostic],
         recovery: &RecoveryStatus,
     ) -> Vec<String> {
@@ -823,6 +846,23 @@ impl ManagerService {
                 .to_string(),
         );
 
+        if live_session.detected
+            && discovery_trace.lookup_missed_count > 0
+            && discovery_trace.matched_count == 0
+        {
+            recommendations.push(
+                "Review the discovery trace to see which service/account combinations were attempted but not found in the system store."
+                    .to_string(),
+            );
+        }
+
+        if live_session.detected && discovery_trace.missing_input_count > 0 {
+            recommendations.push(
+                "Some discovery rules could not expand because auth.json does not contain every expected identity field."
+                    .to_string(),
+            );
+        }
+
         if recovery.pending_count > 0 {
             recommendations.push(
                 "Interrupted switch state was found. Run recover before saving or switching profiles again."
@@ -831,6 +871,79 @@ impl ManagerService {
         }
 
         recommendations
+    }
+
+    fn build_discovery_trace(&self) -> DiscoveryTraceReport {
+        let Ok(auth_contents) = fs::read_to_string(self.file_store.auth_path()) else {
+            return DiscoveryTraceReport {
+                matched_count: 0,
+                missing_input_count: 0,
+                lookup_missed_count: 0,
+                blocked_count: 0,
+                entries: Vec::new(),
+                detail: "No auth.json was available for discovery tracing.".to_string(),
+            };
+        };
+        let Ok(inspection) = inspect_auth_json(&auth_contents) else {
+            return DiscoveryTraceReport {
+                matched_count: 0,
+                missing_input_count: 0,
+                lookup_missed_count: 0,
+                blocked_count: 0,
+                entries: Vec::new(),
+                detail: "auth.json exists, but discovery tracing could not parse it.".to_string(),
+            };
+        };
+        let store = self
+            .system_stores
+            .iter()
+            .find(|store| store.is_available())
+            .map(|store| store.as_ref());
+        let entries = self.discovery_registry.trace(&inspection, store);
+        let matched_count = entries
+            .iter()
+            .filter(|entry| entry.status == CredentialDiscoveryTraceStatus::Matched)
+            .count();
+        let missing_input_count = entries
+            .iter()
+            .filter(|entry| entry.status == CredentialDiscoveryTraceStatus::MissingInput)
+            .count();
+        let lookup_missed_count = entries
+            .iter()
+            .filter(|entry| entry.status == CredentialDiscoveryTraceStatus::LookupMissed)
+            .count();
+        let blocked_count = entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    CredentialDiscoveryTraceStatus::MissingInput
+                        | CredentialDiscoveryTraceStatus::StoreUnavailable
+                        | CredentialDiscoveryTraceStatus::SourceTypeMismatch
+                        | CredentialDiscoveryTraceStatus::DuplicateCandidate
+                )
+            })
+            .count();
+        let detail = if entries.is_empty() {
+            "No credential discovery rules were available to trace.".to_string()
+        } else {
+            format!(
+                "Traced {} discovery rule(s): {} matched, {} missed lookups, {} blocked before lookup.",
+                entries.len(),
+                matched_count,
+                lookup_missed_count,
+                blocked_count
+            )
+        };
+
+        DiscoveryTraceReport {
+            matched_count,
+            missing_input_count,
+            lookup_missed_count,
+            blocked_count,
+            entries,
+            detail,
+        }
     }
 
     fn recent_audit_entries(&self, limit: usize) -> Result<Vec<String>> {
@@ -1130,7 +1243,9 @@ mod tests {
         SecretRecord, SwitchError,
     };
     use codex_switch_platform::inspect::inspect_auth_json;
-    use codex_switch_platform::{CredentialDiscoveryRegistry, CredentialDiscoveryRule};
+    use codex_switch_platform::{
+        CredentialDiscoveryRegistry, CredentialDiscoveryRule, CredentialDiscoveryTraceStatus,
+    };
     use secrecy::SecretString;
     use tempfile::tempdir;
 
@@ -1205,7 +1320,7 @@ mod tests {
             paths,
             None,
             registry,
-            vec![Box::new(MockStore { available: Vec::new() })],
+            vec![Box::new(MockStore { available: detector_records.clone() })],
             vec![Box::new(MockStore { available: detector_records })],
         )
         .expect("manager")
@@ -1587,6 +1702,73 @@ mod tests {
             CredentialDiscoveryRegistry::standard_rules().len() + 1
         );
         assert_eq!(report.stores.len(), 3);
+    }
+
+    #[test]
+    fn doctor_report_includes_discovery_trace_statuses() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_registry(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::new(vec![
+                CredentialDiscoveryRule {
+                    name: "custom-account-id".to_string(),
+                    source_type: Some(SourceType::ChatGpt),
+                    service: "custom-openai".to_string(),
+                    account: "{account_id}".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                },
+                CredentialDiscoveryRule {
+                    name: "custom-subject".to_string(),
+                    source_type: Some(SourceType::ChatGpt),
+                    service: "custom-openai".to_string(),
+                    account: "{subject}".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                },
+            ]),
+            vec![SecretRecord {
+                reference: CredentialRef {
+                    service: "custom-openai".to_string(),
+                    account: "acct-custom".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                },
+                secret: SecretString::new("custom-secret-token".into()),
+            }],
+        );
+
+        let report = manager.doctor_report().expect("doctor");
+        let json = serde_json::to_string(&report).expect("json");
+
+        assert_eq!(report.discovery_trace.matched_count, 1);
+        assert_eq!(report.discovery_trace.missing_input_count, 1);
+        assert!(
+            report
+                .discovery_trace
+                .entries
+                .iter()
+                .any(|entry| entry.status == CredentialDiscoveryTraceStatus::Matched)
+        );
+        assert!(
+            report
+                .discovery_trace
+                .entries
+                .iter()
+                .any(|entry| entry.status == CredentialDiscoveryTraceStatus::MissingInput)
+        );
+        assert!(
+            report
+                .discovery_trace
+                .entries
+                .iter()
+                .any(|entry| entry.account_label_masked.as_deref() == Some("acct_****stom"))
+        );
+        assert!(!json.contains("acct-custom"));
     }
 
     #[test]

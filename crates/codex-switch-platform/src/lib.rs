@@ -14,7 +14,10 @@ pub mod vault;
 pub use credential_file::FileCredentialStore;
 pub use credential_linux::LinuxKeyringCredentialStore;
 pub use credential_macos::MacKeychainCredentialStore;
-pub use credential_registry::{CredentialDiscoveryRegistry, CredentialDiscoveryRule};
+pub use credential_registry::{
+    CredentialDiscoveryRegistry, CredentialDiscoveryRule, CredentialDiscoveryTraceEntry,
+    CredentialDiscoveryTraceStatus,
+};
 pub use credential_windows::WindowsCredentialStore;
 pub use detector::AuthJsonSessionDetector;
 pub use diagnostics::{StoreDiagnostic, default_store_diagnostics};
