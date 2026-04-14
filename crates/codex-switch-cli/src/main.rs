@@ -368,6 +368,21 @@ fn print_doctor(report: &DoctorReport) {
             txn.started_at.to_rfc3339()
         );
     }
+    if !report.profile_readiness.is_empty() {
+        println!("Profile inventory:");
+        for profile in &report.profile_readiness {
+            println!(
+                "Profile {}  status={} blockers={} warnings={} source_os={} source_store={}  {}",
+                profile.profile_name,
+                profile.status,
+                profile.blocker_count,
+                profile.warning_count,
+                profile.source_operating_system,
+                profile.source_system_store_name.as_deref().unwrap_or("-"),
+                profile.detail
+            );
+        }
+    }
     if !report.recommended_actions.is_empty() {
         println!("Recommendations:");
         for action in &report.recommended_actions {

@@ -103,6 +103,19 @@ type DashboardData = {
         rollback_required: boolean;
       }>;
     };
+    profile_readiness: Array<{
+      profile_name: string;
+      account_label_masked: string;
+      credential_mode: string;
+      status: "ready" | "warning" | "blocked";
+      blocker_count: number;
+      warning_count: number;
+      detail: string;
+      blockers: string[];
+      warnings: string[];
+      source_operating_system: string;
+      source_system_store_name?: string | null;
+    }>;
     recommended_actions: string[];
   };
   profiles: ProfileMeta[];
@@ -569,6 +582,46 @@ export function App() {
             </div>
           ))}
         </div>
+        {!!dashboard?.doctor.profile_readiness.length && (
+          <div className="store-list">
+            {dashboard.doctor.profile_readiness.map((profile) => (
+              <div className="store-card" key={profile.profile_name}>
+                <div className="profile-topline">
+                  <strong>{profile.profile_name}</strong>
+                  <span
+                    className={`badge ${
+                      profile.status === "ready"
+                        ? "badge-ready"
+                        : profile.status === "warning"
+                          ? "badge-warning"
+                          : "badge-blocked"
+                    }`}
+                  >
+                    {profile.status}
+                  </span>
+                </div>
+                <p className="muted">
+                  {profile.account_label_masked} · {profile.credential_mode} · source=
+                  {profile.source_operating_system}
+                  {profile.source_system_store_name
+                    ? `/${profile.source_system_store_name}`
+                    : ""}
+                </p>
+                <p className="muted">{profile.detail}</p>
+                {!!profile.blockers.length && (
+                  <p className="muted">
+                    {profile.blockers.map((blocker) => `Blocker: ${blocker}`).join(" ")}
+                  </p>
+                )}
+                {!!profile.warnings.length && (
+                  <p className="muted">
+                    {profile.warnings.map((warning) => `Warning: ${warning}`).join(" ")}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {!!dashboard?.doctor.recommended_actions.length && (
           <div className="doctor-actions">
             {dashboard.doctor.recommended_actions.map((action) => (

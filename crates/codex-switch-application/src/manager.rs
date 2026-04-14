@@ -131,6 +131,21 @@ pub struct DoctorLiveSessionStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DoctorProfileReadiness {
+    pub profile_name: String,
+    pub account_label_masked: String,
+    pub credential_mode: codex_switch_domain::CredentialMode,
+    pub status: String,
+    pub blocker_count: usize,
+    pub warning_count: usize,
+    pub detail: String,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+    pub source_operating_system: String,
+    pub source_system_store_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DoctorReport {
     pub operating_system: String,
     pub codex_home: String,
@@ -142,6 +157,7 @@ pub struct DoctorReport {
     pub switch_probes: SwitchProbeReport,
     pub stores: Vec<codex_switch_platform::StoreDiagnostic>,
     pub recovery: RecoveryStatus,
+    pub profile_readiness: Vec<DoctorProfileReadiness>,
     pub recommended_actions: Vec<String>,
 }
 
@@ -516,11 +532,12 @@ impl ManagerService {
         let auth_path = self.file_store.auth_path();
         let auth_file_exists = auth_path.exists();
         let auth_file_readable = auth_path.is_file() && fs::read_to_string(&auth_path).is_ok();
-        let live_session = match self.detect() {
+        let live_detection = self.detect();
+        let live_session = match &live_detection {
             Ok(session) => DoctorLiveSessionStatus {
                 detected: true,
                 detail: "Live session detected from the current local state.".to_string(),
-                account_label_masked: Some(session.account_label_masked),
+                account_label_masked: Some(session.account_label_masked.clone()),
                 source_type: Some(session.source_type),
                 credential_mode: Some(session.credential_mode),
             },
@@ -536,6 +553,9 @@ impl ManagerService {
         let discovery_trace = self.build_discovery_trace();
         let switch_probes = self.run_switch_probes();
         let recovery = self.inspect_recovery_status()?;
+        let binding = self.read_binding()?;
+        let profile_readiness =
+            self.build_doctor_profile_readiness(&binding, live_detection.as_ref().ok())?;
         let recommended_actions = self.build_doctor_recommendations(
             auth_file_exists,
             &live_session,
@@ -543,6 +563,7 @@ impl ManagerService {
             &switch_probes,
             &stores,
             &recovery,
+            &profile_readiness,
         );
 
         Ok(DoctorReport {
@@ -560,6 +581,7 @@ impl ManagerService {
             switch_probes,
             stores,
             recovery,
+            profile_readiness,
             recommended_actions,
         })
     }
@@ -848,6 +870,7 @@ impl ManagerService {
         switch_probes: &SwitchProbeReport,
         stores: &[codex_switch_platform::StoreDiagnostic],
         recovery: &RecoveryStatus,
+        profile_readiness: &[DoctorProfileReadiness],
     ) -> Vec<String> {
         let mut recommendations = Vec::new();
 
@@ -911,7 +934,87 @@ impl ManagerService {
             );
         }
 
+        let blocked_profiles =
+            profile_readiness.iter().filter(|profile| profile.status == "blocked").count();
+        let warning_profiles =
+            profile_readiness.iter().filter(|profile| profile.status == "warning").count();
+
+        if blocked_profiles > 0 {
+            recommendations.push(format!(
+                "{blocked_profiles} blocked profile inventory entr{} need machine-specific attention before switching.",
+                if blocked_profiles == 1 { "y" } else { "ies" }
+            ));
+        }
+
+        if warning_profiles > 0 {
+            recommendations.push(format!(
+                "{warning_profiles} saved profile{} have compatibility warnings. Review the profile inventory or run check <name> before switching.",
+                if warning_profiles == 1 { "" } else { "s" }
+            ));
+        }
+
         recommendations
+    }
+
+    fn build_doctor_profile_readiness(
+        &self,
+        binding: &CurrentBinding,
+        live_session: Option<&DetectedSession>,
+    ) -> Result<Vec<DoctorProfileReadiness>> {
+        let mut readiness = Vec::new();
+        for profile in self.read_profiles()? {
+            match self.load_snapshot(profile.id) {
+                Ok(snapshot) => {
+                    let drifted = binding.active_profile_id == Some(profile.id)
+                        && live_session
+                            .map(|live| {
+                                live.live_fingerprint != snapshot.manifest.vault_fingerprint
+                            })
+                            .unwrap_or(false);
+                    let preflight = self.build_profile_preflight(&snapshot, drifted);
+                    let status = if !preflight.ready {
+                        "blocked"
+                    } else if !preflight.warnings.is_empty() {
+                        "warning"
+                    } else {
+                        "ready"
+                    };
+                    readiness.push(DoctorProfileReadiness {
+                        profile_name: profile.name,
+                        account_label_masked: profile.account_label_masked,
+                        credential_mode: profile.credential_mode,
+                        status: status.to_string(),
+                        blocker_count: preflight.blockers.len(),
+                        warning_count: preflight.warnings.len(),
+                        detail: preflight.detail,
+                        blockers: preflight.blockers,
+                        warnings: preflight.warnings,
+                        source_operating_system: snapshot.manifest.provenance.operating_system,
+                        source_system_store_name: snapshot.manifest.provenance.system_store_name,
+                    });
+                }
+                Err(error) => {
+                    readiness.push(DoctorProfileReadiness {
+                        profile_name: profile.name,
+                        account_label_masked: profile.account_label_masked,
+                        credential_mode: profile.credential_mode,
+                        status: "blocked".to_string(),
+                        blocker_count: 1,
+                        warning_count: 0,
+                        detail: format!(
+                            "Profile snapshot could not be loaded on this machine: {error}"
+                        ),
+                        blockers: vec![format!(
+                            "Profile snapshot could not be loaded on this machine: {error}"
+                        )],
+                        warnings: Vec::new(),
+                        source_operating_system: "unknown".to_string(),
+                        source_system_store_name: None,
+                    });
+                }
+            }
+        }
+        Ok(readiness)
     }
 
     fn run_switch_probes(&self) -> SwitchProbeReport {
@@ -2258,6 +2361,146 @@ mod tests {
         assert!(report.switch_probes.data_dir_write.ok);
         assert!(report.switch_probes.lock_acquire.ok);
         assert!(report.switch_probes.atomic_swap.ok);
+    }
+
+    #[test]
+    fn doctor_report_includes_profile_readiness_inventory() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save alpha");
+
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth custom");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+        let writer = manager_with_store_mode(
+            codex_home.clone(),
+            app_home.clone(),
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            "macos_keychain",
+            "macos_keychain",
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "beta".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save beta");
+
+        let checker = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            vec![system_record],
+            Vec::new(),
+            "linux_keyring",
+            "linux_keyring",
+            true,
+        );
+
+        let report = checker.doctor_report().expect("doctor");
+
+        assert_eq!(report.profile_readiness.len(), 2);
+        assert_eq!(report.profile_readiness[0].profile_name, "alpha");
+        assert_eq!(report.profile_readiness[0].status, "ready");
+        assert_eq!(report.profile_readiness[1].profile_name, "beta");
+        assert_eq!(report.profile_readiness[1].status, "warning");
+        assert_eq!(report.profile_readiness[1].warning_count, 1);
+    }
+
+    #[test]
+    fn doctor_report_recommends_reviewing_blocked_profiles() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+
+        let writer = manager_with_store_mode(
+            codex_home.clone(),
+            app_home.clone(),
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            "macos_keychain",
+            "macos_keychain",
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "beta".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save beta");
+
+        let checker = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            Vec::new(),
+            Vec::new(),
+            "linux_keyring",
+            "linux_keyring",
+            false,
+        );
+
+        let report = checker.doctor_report().expect("doctor");
+
+        assert!(report.profile_readiness.iter().any(|profile| profile.status == "blocked"));
+        assert!(report.recommended_actions.iter().any(|action| {
+            action.contains("blocked profile") || action.contains("profile inventory")
+        }));
     }
 
     #[test]

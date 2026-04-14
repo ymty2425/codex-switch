@@ -60,6 +60,7 @@
 - 当前绑定状态
 - 当前 live 会话与 active profile 的同步状态
 - 平台就绪度诊断输出
+- 全量 profile readiness inventory，可在 `doctor` 中汇总每个 profile 的 ready / warning / blocked 状态
 - 系统凭证 discovery trace，可见每条规则的展开和查找状态
 - non-destructive switch probes，可见锁文件、数据目录和同目录 rename 的就绪度
 - 未完成切换事务的可见性与显式恢复
@@ -112,6 +113,12 @@ manager 启动时会先加载标准规则，再把自定义规则追加进去。
 - system store 缺失时继续作为 blocker
 - profile 带系统凭证且来源平台不同，会给出 compatibility warning
 - profile 带系统凭证且来源 store 与当前 store 不同，也会给出 compatibility warning
+
+`doctor_report` 会在整机视角复用这套 preflight 逻辑，生成 profile inventory：
+
+- `ready`：当前机器没有 blocker，也没有额外 warning
+- `warning`：可以切换，但存在 drift 或平台 / store 兼容性提示
+- `blocked`：当前机器存在明确切换阻塞因素
 
 不会复制：
 

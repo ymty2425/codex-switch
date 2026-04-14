@@ -38,6 +38,7 @@
 - non-destructive switch probes 只能说明当前目录和锁路径在 probe 时刻可用，不代表外部进程之后不会重新占用或改写这些位置
 - profile preflight 也是本地即时判断；即使某次 `check` 显示 ready，后续环境变化仍可能让真正的 `use` 失败并进入回滚
 - snapshot provenance 记录的是保存当时的来源平台与 store，可用于兼容性提醒，但不能单独证明跨平台导入后的官方会话一定可用
+- `doctor` 的 profile inventory 复用的是同一套本地 preflight 规则，所以它适合做整机筛查，不应被理解成官方在线验活结果
 
 ### 安全擦除只能最佳努力
 
