@@ -483,6 +483,7 @@ version = "0.1.0"
 dependencies = [
  "codex-switch-application",
  "codex-switch-domain",
+ "secrecy",
  "serde",
  "serde_json",
  "tauri",

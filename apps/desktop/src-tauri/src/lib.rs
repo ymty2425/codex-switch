@@ -3,7 +3,9 @@ use codex_switch_application::{
     UseProfileRequest,
 };
 use codex_switch_domain::ProfileMeta;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Serialize)]
 struct DashboardData {
@@ -13,6 +15,7 @@ struct DashboardData {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SaveProfilePayload {
     name: String,
     note: Option<String>,
@@ -20,9 +23,32 @@ struct SaveProfilePayload {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UseProfilePayload {
     name: String,
     make_default: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameProfilePayload {
+    old_name: String,
+    new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportProfilePayload {
+    name: String,
+    passphrase: String,
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportProfilePayload {
+    path: PathBuf,
+    passphrase: String,
 }
 
 type CommandResult<T> = std::result::Result<T, String>;
@@ -79,6 +105,50 @@ fn sync_active_profile() -> CommandResult<DashboardData> {
     load_dashboard(&manager)
 }
 
+#[tauri::command]
+fn rename_profile(payload: RenameProfilePayload) -> CommandResult<DashboardData> {
+    let manager = manager()?;
+    manager
+        .rename_profile(&payload.old_name, &payload.new_name)
+        .map_err(|error| error.to_string())?;
+    load_dashboard(&manager)
+}
+
+#[tauri::command]
+fn delete_profile(name: String) -> CommandResult<DashboardData> {
+    let manager = manager()?;
+    manager.delete_profile(&name).map_err(|error| error.to_string())?;
+    load_dashboard(&manager)
+}
+
+#[tauri::command]
+fn set_default_profile(name: String) -> CommandResult<DashboardData> {
+    let manager = manager()?;
+    manager.set_default_profile_by_name(&name).map_err(|error| error.to_string())?;
+    load_dashboard(&manager)
+}
+
+#[tauri::command]
+fn export_profile(payload: ExportProfilePayload) -> CommandResult<String> {
+    manager()?
+        .export_profile(
+            &payload.name,
+            SecretString::new(payload.passphrase.into()),
+            payload.output.as_deref(),
+        )
+        .map(|path| path.display().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_profile(payload: ImportProfilePayload) -> CommandResult<DashboardData> {
+    let manager = manager()?;
+    manager
+        .import_profile(&payload.path, SecretString::new(payload.passphrase.into()))
+        .map_err(|error| error.to_string())?;
+    load_dashboard(&manager)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -88,7 +158,12 @@ pub fn run() {
             save_profile,
             use_profile,
             check_profile,
-            sync_active_profile
+            sync_active_profile,
+            rename_profile,
+            delete_profile,
+            set_default_profile,
+            export_profile,
+            import_profile
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

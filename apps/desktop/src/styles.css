@@ -151,6 +151,10 @@ textarea {
   gap: 12px;
 }
 
+.actions {
+  flex-wrap: wrap;
+}
+
 .save-form,
 .profile-list {
   display: flex;
@@ -214,6 +218,11 @@ button:disabled {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.danger {
+  color: #ffd7ce;
+  background: rgba(255, 144, 115, 0.16);
+}
+
 .profile-card {
   padding: 16px;
 }
@@ -239,6 +248,13 @@ button:disabled {
 .muted,
 .status {
   color: rgba(245, 242, 235, 0.72);
+}
+
+.transfer-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
 }
 
 .error {
