@@ -15,7 +15,7 @@
 
 - 不拦截 OAuth，不做 MITM，不劫持流量，不伪造登录
 - MVP 只管理最小认证快照，当前已实现的主探测对象是 `auth.json`
-- 当前 build 下最完整的切换路径是文件型凭证；系统凭证适配层已经建好接口与平台实现入口，但探测器还没有发现官方系统凭证条目
+- 当前 build 下最稳定的切换路径仍然是文件型凭证；系统凭证已支持基于规则的启发式发现，完整官方条目覆盖仍需继续扩展
 
 ## 仓库结构
 
@@ -99,8 +99,9 @@ config.json 默认 profile 配置
 ## 当前实现状态
 
 - 已实现：`auth.json` 文件型会话检测、最小快照保存、切换回滚、显式 `sync`、导出导入、Tauri UI 壳子
+- 已实现：系统凭证规则注册表，支持根据 `auth.json` 里的 `email`、`sub`、`account_id` 线索做 mixed-mode 启发式发现
 - 已搭好适配层：macOS Keychain、Linux Secret Service、Windows Credential Manager
-- 下一步重点：把系统凭证探测规则扩展成 registry，并补更多官方本地状态源
+- 下一步重点：补更多官方条目规则、扩展更多本地状态源、做三平台实机验证
 
 更多细节见：
 

@@ -8,6 +8,8 @@ type ProfileMeta = {
   name: string;
   account_label_masked: string;
   account_fingerprint: string;
+  source_type: string;
+  credential_mode: string;
   is_default: boolean;
   note?: string | null;
   health: {
@@ -24,6 +26,7 @@ type CurrentStatus = {
     account_label_masked: string;
     account_fingerprint: string;
     source_type: string;
+    credential_mode: string;
     last_refresh_at?: string | null;
   };
   active_profile?: ProfileMeta | null;
@@ -133,6 +136,14 @@ export function App() {
           <div className="stat-value">
             {dashboard?.current.live_session.account_label_masked ?? "Unavailable"}
           </div>
+          <div className="stat-meta">
+            <span className="badge subtle">
+              {dashboard?.current.live_session.source_type ?? "unknown"}
+            </span>
+            <span className="badge subtle">
+              {dashboard?.current.live_session.credential_mode ?? "unknown"}
+            </span>
+          </div>
           <div className="stat-label">Active Profile</div>
           <div className="stat-value">
             {dashboard?.current.active_profile?.name ?? "None"}
@@ -196,7 +207,11 @@ export function App() {
               <div className="profile-card" key={profile.id}>
                 <div className="profile-topline">
                   <h3>{profile.name}</h3>
-                  {profile.is_default ? <span className="badge">Default</span> : null}
+                  <div className="profile-badges">
+                    <span className="badge subtle">{profile.source_type}</span>
+                    <span className="badge subtle">{profile.credential_mode}</span>
+                    {profile.is_default ? <span className="badge">Default</span> : null}
+                  </div>
                 </div>
                 <p className="muted">{profile.account_label_masked}</p>
                 <p className={`health health-${profile.health.status}`}>

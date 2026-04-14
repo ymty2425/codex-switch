@@ -23,6 +23,7 @@ cargo test -p codex-switch-platform
 
 - 路径发现覆盖逻辑
 - `auth.json` 解析与账号推断
+- 系统凭证 registry 模板展开与 mixed-mode 探测
 - 本地 vault 的导出导入加密回环
 
 ### Application
