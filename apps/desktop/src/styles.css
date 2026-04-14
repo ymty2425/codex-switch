@@ -162,6 +162,32 @@ textarea {
   gap: 14px;
 }
 
+.doctor-grid,
+.store-list,
+.doctor-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.doctor-grid {
+  margin-bottom: 14px;
+}
+
+.doctor-card,
+.store-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(245, 242, 235, 0.08);
+}
+
+.doctor-path {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 .save-form label {
   display: flex;
   flex-direction: column;
@@ -241,6 +267,16 @@ button:disabled {
 
 .badge.subtle {
   min-width: auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(245, 242, 235, 0.86);
+}
+
+.badge-ready {
+  background: rgba(137, 240, 202, 0.12);
+  color: #89f0ca;
+}
+
+.badge-idle {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(245, 242, 235, 0.86);
 }

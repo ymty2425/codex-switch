@@ -13,7 +13,7 @@ use codex_switch_domain::{
 use codex_switch_platform::{
     AuthJsonSessionDetector, CredentialDiscoveryRegistry, CredentialDiscoveryRule,
     FileCredentialStore, GlobalSwitchLock, LinuxKeyringCredentialStore, LocalProfileVault,
-    MacKeychainCredentialStore, PathResolver, WindowsCredentialStore,
+    MacKeychainCredentialStore, PathResolver, WindowsCredentialStore, default_store_diagnostics,
     fs_secure::{atomic_write, ensure_dir, list_json_files, secure_delete},
     locator::AppPaths,
 };
@@ -71,6 +71,34 @@ pub struct CheckReport {
     pub drifted: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorPathStatus {
+    pub path: String,
+    pub exists: bool,
+    pub readable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorLiveSessionStatus {
+    pub detected: bool,
+    pub detail: String,
+    pub account_label_masked: Option<String>,
+    pub source_type: Option<codex_switch_domain::SourceType>,
+    pub credential_mode: Option<codex_switch_domain::CredentialMode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport {
+    pub operating_system: String,
+    pub codex_home: String,
+    pub data_dir: String,
+    pub auth_file: DoctorPathStatus,
+    pub discovery_rule_count: usize,
+    pub live_session: DoctorLiveSessionStatus,
+    pub stores: Vec<codex_switch_platform::StoreDiagnostic>,
+    pub recommended_actions: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct AppConfig {
     default_profile_id: Option<ProfileId>,
@@ -84,6 +112,7 @@ pub struct ManagerService {
     file_store: FileCredentialStore,
     vault: LocalProfileVault,
     system_stores: Vec<Box<dyn OfficialCredentialStore>>,
+    discovery_rule_count: usize,
     local_encryption_enabled: bool,
 }
 
@@ -91,6 +120,7 @@ impl std::fmt::Debug for ManagerService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagerService")
             .field("paths", &self.paths)
+            .field("discovery_rule_count", &self.discovery_rule_count)
             .field("local_encryption_enabled", &self.local_encryption_enabled)
             .finish()
     }
@@ -116,6 +146,7 @@ impl ManagerService {
         system_stores: Vec<Box<dyn OfficialCredentialStore>>,
         detector_system_stores: Vec<Box<dyn OfficialCredentialStore>>,
     ) -> Result<Self> {
+        let discovery_rule_count = registry.rule_count();
         let file_store = FileCredentialStore::new(paths.codex_home.clone());
         let detector = AuthJsonSessionDetector::with_registry(
             file_store.clone(),
@@ -134,6 +165,7 @@ impl ManagerService {
             file_store,
             vault,
             system_stores,
+            discovery_rule_count,
             local_encryption_enabled: local_passphrase.is_some(),
         };
         service.ensure_layout()?;
@@ -360,6 +392,47 @@ impl ManagerService {
         Ok(profile)
     }
 
+    pub fn doctor_report(&self) -> Result<DoctorReport> {
+        self.ensure_layout()?;
+        let auth_path = self.file_store.auth_path();
+        let auth_file_exists = auth_path.exists();
+        let auth_file_readable = auth_path.is_file() && fs::read_to_string(&auth_path).is_ok();
+        let live_session = match self.detect() {
+            Ok(session) => DoctorLiveSessionStatus {
+                detected: true,
+                detail: "Live session detected from the current local state.".to_string(),
+                account_label_masked: Some(session.account_label_masked),
+                source_type: Some(session.source_type),
+                credential_mode: Some(session.credential_mode),
+            },
+            Err(error) => DoctorLiveSessionStatus {
+                detected: false,
+                detail: error.to_string(),
+                account_label_masked: None,
+                source_type: None,
+                credential_mode: None,
+            },
+        };
+        let stores = default_store_diagnostics();
+        let recommended_actions =
+            self.build_doctor_recommendations(auth_file_exists, &live_session, &stores);
+
+        Ok(DoctorReport {
+            operating_system: std::env::consts::OS.to_string(),
+            codex_home: self.paths.codex_home.display().to_string(),
+            data_dir: self.paths.data_dir.display().to_string(),
+            auth_file: DoctorPathStatus {
+                path: auth_path.display().to_string(),
+                exists: auth_file_exists,
+                readable: auth_file_readable,
+            },
+            discovery_rule_count: self.discovery_rule_count,
+            live_session,
+            stores,
+            recommended_actions,
+        })
+    }
+
     pub fn rename_profile(&self, old_name: &str, new_name: &str) -> Result<ProfileMeta> {
         if self.find_profile_by_name_optional(new_name)?.is_some() {
             return Err(SwitchError::Conflict(format!(
@@ -540,6 +613,43 @@ impl ManagerService {
                     .to_string(),
             },
         }
+    }
+
+    fn build_doctor_recommendations(
+        &self,
+        auth_file_exists: bool,
+        live_session: &DoctorLiveSessionStatus,
+        stores: &[codex_switch_platform::StoreDiagnostic],
+    ) -> Vec<String> {
+        let mut recommendations = Vec::new();
+
+        if !auth_file_exists {
+            recommendations.push(
+                "Run one official login on this machine so the client can create auth.json."
+                    .to_string(),
+            );
+        }
+
+        if !live_session.detected {
+            recommendations.push(
+                "Re-run detect or doctor after the official client has completed a login."
+                    .to_string(),
+            );
+        }
+
+        if !stores.iter().any(|store| store.available) {
+            recommendations.push(
+                "No supported system credential store is currently available, so file-backed sessions will be the most reliable path."
+                    .to_string(),
+            );
+        }
+
+        recommendations.push(
+            "If your official service/account names differ from the defaults, add credential_discovery_rules to config.json."
+                .to_string(),
+        );
+
+        recommendations
     }
 
     fn read_config(&self) -> Result<AppConfig> {
@@ -1177,6 +1287,73 @@ mod tests {
 
         assert_eq!(config.credential_discovery_rules, vec![original_rule]);
         assert!(config.default_profile_id.is_some());
+    }
+
+    #[test]
+    fn doctor_report_flags_missing_auth_file_and_recommends_official_login() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(!report.auth_file.exists);
+        assert!(!report.live_session.detected);
+        assert!(
+            report
+                .recommended_actions
+                .iter()
+                .any(|action| action.contains("official") || action.contains("log"))
+        );
+    }
+
+    #[test]
+    fn doctor_report_counts_custom_discovery_rules() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::create_dir_all(&app_home).expect("app_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+        fs::write(
+            app_home.join("config.json"),
+            serde_json::to_vec_pretty(&AppConfig {
+                default_profile_id: None,
+                credential_discovery_rules: vec![CredentialDiscoveryRule {
+                    name: "custom-openai".to_string(),
+                    source_type: Some(SourceType::ChatGpt),
+                    service: "custom-openai".to_string(),
+                    account: "{account_id}".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                }],
+            })
+            .expect("config"),
+        )
+        .expect("write config");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert_eq!(
+            report.discovery_rule_count,
+            CredentialDiscoveryRegistry::standard_rules().len() + 1
+        );
+        assert_eq!(report.stores.len(), 3);
     }
 
     #[test]

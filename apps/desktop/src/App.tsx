@@ -39,6 +39,31 @@ type CurrentStatus = {
 
 type DashboardData = {
   current: CurrentStatus;
+  doctor: {
+    operating_system: string;
+    codex_home: string;
+    data_dir: string;
+    auth_file: {
+      path: string;
+      exists: boolean;
+      readable: boolean;
+    };
+    discovery_rule_count: number;
+    live_session: {
+      detected: boolean;
+      detail: string;
+      account_label_masked?: string | null;
+      source_type?: string | null;
+      credential_mode?: string | null;
+    };
+    stores: Array<{
+      name: string;
+      supported: boolean;
+      available: boolean;
+      detail: string;
+    }>;
+    recommended_actions: string[];
+  };
   profiles: ProfileMeta[];
   logs: string;
 };
@@ -379,6 +404,52 @@ export function App() {
             ) : null}
           </div>
         </article>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Platform Readiness</h2>
+          <span>{dashboard?.doctor.operating_system ?? "unknown"}</span>
+        </div>
+        <div className="doctor-grid">
+          <div className="doctor-card">
+            <div className="stat-label">Auth File</div>
+            <div className="doctor-path">{dashboard?.doctor.auth_file.path ?? "Unavailable"}</div>
+            <p className="muted">
+              exists={String(dashboard?.doctor.auth_file.exists ?? false)} readable=
+              {String(dashboard?.doctor.auth_file.readable ?? false)}
+            </p>
+          </div>
+          <div className="doctor-card">
+            <div className="stat-label">Discovery Rules</div>
+            <div className="stat-value">{dashboard?.doctor.discovery_rule_count ?? 0}</div>
+            <p className="muted">{dashboard?.doctor.live_session.detail ?? "No session detail."}</p>
+          </div>
+        </div>
+        <div className="store-list">
+          {dashboard?.doctor.stores.map((store) => (
+            <div className="store-card" key={store.name}>
+              <div className="profile-topline">
+                <strong>{store.name}</strong>
+                <span
+                  className={`badge ${store.available ? "badge-ready" : "badge-idle"}`}
+                >
+                  {store.available ? "Ready" : store.supported ? "Blocked" : "Unsupported"}
+                </span>
+              </div>
+              <p className="muted">{store.detail}</p>
+            </div>
+          ))}
+        </div>
+        {!!dashboard?.doctor.recommended_actions.length && (
+          <div className="doctor-actions">
+            {dashboard.doctor.recommended_actions.map((action) => (
+              <p className="muted" key={action}>
+                {action}
+              </p>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="panel">
