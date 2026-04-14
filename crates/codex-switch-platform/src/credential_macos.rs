@@ -25,6 +25,10 @@ impl OfficialCredentialStore for MacKeychainCredentialStore {
         CredentialMode::System
     }
 
+    fn store_name(&self) -> &'static str {
+        "macos_keychain"
+    }
+
     fn is_available(&self) -> bool {
         cfg!(target_os = "macos")
     }

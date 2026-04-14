@@ -25,6 +25,10 @@ impl OfficialCredentialStore for LinuxKeyringCredentialStore {
         CredentialMode::System
     }
 
+    fn store_name(&self) -> &'static str {
+        "linux_keyring"
+    }
+
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && which::which("secret-tool").is_ok()
     }

@@ -10,6 +10,10 @@ impl OfficialCredentialStore for WindowsCredentialStore {
         CredentialMode::System
     }
 
+    fn store_name(&self) -> &'static str {
+        "windows_credential_manager"
+    }
+
     fn is_available(&self) -> bool {
         cfg!(target_os = "windows")
     }

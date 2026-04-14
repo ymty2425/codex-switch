@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use codex_switch_domain::{
         profile::{CredentialMode, ProfileHealth, SourceType},
-        session::{CredentialRef, ProfileVaultManifest},
+        session::{CredentialRef, ProfileVaultManifest, SnapshotProvenance},
     };
 
     #[test]
@@ -250,6 +250,7 @@ mod tests {
                     label: None,
                 }],
                 vault_fingerprint: "fingerprint".to_string(),
+                provenance: SnapshotProvenance::default(),
             },
             file_entries: vec![],
             system_records: vec![],

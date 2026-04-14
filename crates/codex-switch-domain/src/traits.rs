@@ -14,6 +14,9 @@ pub trait SessionDetector: Send + Sync {
 
 pub trait OfficialCredentialStore: Send + Sync {
     fn kind(&self) -> CredentialMode;
+    fn store_name(&self) -> &'static str {
+        "system_store"
+    }
     fn is_available(&self) -> bool;
     fn read(&self, refs: &[CredentialRef]) -> Result<Vec<SecretRecord>>;
     fn write(&self, records: &[SecretRecord]) -> Result<()>;

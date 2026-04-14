@@ -9,7 +9,7 @@ pub use profile::{
 };
 pub use session::{
     AuthMode, CredentialRef, CurrentBinding, DetectedSession, ExportEnvelope, FileEntry,
-    ProfileVaultManifest, SecretRecord, SecretSnapshot, SwitchPhase, SwitchTransaction,
-    SystemEntry,
+    ProfileVaultManifest, SecretRecord, SecretSnapshot, SnapshotProvenance, SwitchPhase,
+    SwitchTransaction, SystemEntry,
 };
 pub use traits::{OfficialCredentialStore, ProfileVault, SessionDetector};
