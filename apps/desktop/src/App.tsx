@@ -249,6 +249,25 @@ export function App() {
     }
   }
 
+  async function handleExportDiagnostics() {
+    try {
+      const output = await save({
+        defaultPath: "session-manager-diagnostics.json",
+        filters: [{ name: "Diagnostic Bundles", extensions: ["json"] }],
+      });
+      if (!output) {
+        return;
+      }
+
+      const bundle = await invoke<string>("export_diagnostic_bundle", {
+        payload: { output },
+      });
+      setStatus(`Exported a diagnostic bundle to ${bundle}.`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -409,7 +428,12 @@ export function App() {
       <section className="panel">
         <div className="panel-header">
           <h2>Platform Readiness</h2>
-          <span>{dashboard?.doctor.operating_system ?? "unknown"}</span>
+          <div className="actions">
+            <span>{dashboard?.doctor.operating_system ?? "unknown"}</span>
+            <button className="ghost" onClick={() => void handleExportDiagnostics()}>
+              Export Diagnostics
+            </button>
+          </div>
         </div>
         <div className="doctor-grid">
           <div className="doctor-card">

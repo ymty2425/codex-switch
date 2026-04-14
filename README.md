@@ -11,6 +11,8 @@
 - 在切换前自动备份当前会话，切换后做指纹校验，失败时自动回滚
 - 主动判断当前 live 会话是否已经偏离 active profile，并提示是否需要执行 `sync`
 - 提供 Rust CLI 和极简 Tauri 桌面端壳子，共用同一套后端服务
+- `detect/current/doctor` 的对外输出默认只暴露脱敏摘要，不直接暴露原始认证内容
+- 可导出脱敏诊断包，方便做三平台实机验收与问题归档
 
 ## 重要边界
 
@@ -35,6 +37,7 @@ apps/
 ```bash
 cargo run -p codex-switch-cli -- detect
 cargo run -p codex-switch-cli -- doctor
+cargo run -p codex-switch-cli -- bundle
 cargo run -p codex-switch-cli -- save personal --note "Daily driver" --default
 cargo run -p codex-switch-cli -- list
 cargo run -p codex-switch-cli -- use personal
@@ -80,6 +83,7 @@ npm --workspace apps/desktop run tauri dev
 - 重命名、删除、导入、导出 profile
 - 健康检查
 - 同步刷新后的会话
+- 导出脱敏诊断包
 - 查看审计日志
 
 ## 数据布局
@@ -128,6 +132,8 @@ config.json 默认 profile 配置
 - 已实现：`auth.json` 文件型会话检测、最小快照保存、切换回滚、显式 `sync`、导出导入、Tauri UI 壳子
 - 已实现：系统凭证规则注册表，支持根据 `auth.json` 里的 `email`、`sub`、`account_id` 线索做 mixed-mode 启发式发现
 - 已实现：`doctor` 平台就绪度报告，可用于实机验证 auth 文件、store 可用性与 discovery rules 配置
+- 已实现：`bundle` 脱敏诊断包导出，适合收集平台状态、profile 元数据和审计尾部用于实机排障
+- 已实现：CLI 和桌面端的当前状态传输已做脱敏，不再把 `auth.json` 原文暴露给 UI 或 `detect/current` JSON 输出
 - 已搭好适配层：macOS Keychain、Linux Secret Service、Windows Credential Manager
 - 下一步重点：补更多官方条目规则、扩展更多本地状态源、做三平台实机验证
 

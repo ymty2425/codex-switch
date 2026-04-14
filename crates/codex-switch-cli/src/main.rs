@@ -2,8 +2,8 @@ use std::{env, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use codex_switch_application::{
-    CheckReport, CurrentStatus, DoctorReport, ManagerOptions, ManagerService, SaveProfileRequest,
-    UseProfileRequest,
+    CheckReport, CurrentStatus, DoctorReport, LiveSessionSummary, ManagerOptions, ManagerService,
+    SaveProfileRequest, UseProfileRequest,
 };
 use codex_switch_domain::{ProfileMeta, Result, SwitchError};
 use secrecy::SecretString;
@@ -29,6 +29,10 @@ struct Cli {
 enum Commands {
     Detect,
     Doctor,
+    Bundle {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     Save {
         name: String,
         #[arg(long)]
@@ -90,13 +94,30 @@ fn run() -> Result<()> {
     })?;
 
     match cli.command {
-        Commands::Detect => print_result(cli.json, "detect", &manager.detect()?),
+        Commands::Detect => {
+            let report = manager.detect_report()?;
+            if cli.json {
+                print_result(true, "detect", &report)
+            } else {
+                print_detect(&report);
+                Ok(())
+            }
+        }
         Commands::Doctor => {
             let report = manager.doctor_report()?;
             if cli.json {
                 print_result(true, "doctor", &report)
             } else {
                 print_doctor(&report);
+                Ok(())
+            }
+        }
+        Commands::Bundle { output } => {
+            let bundle_path = manager.export_diagnostic_bundle(output.as_deref())?;
+            if cli.json {
+                print_result(true, "bundle", &serde_json::json!({ "bundle": bundle_path }))
+            } else {
+                println!("{}", bundle_path.display());
                 Ok(())
             }
         }
@@ -229,6 +250,33 @@ fn print_current(current: &CurrentStatus) {
     }
     println!("Sync status: {:?}", current.sync_state.status);
     println!("{}", current.sync_state.detail);
+}
+
+fn print_detect(report: &LiveSessionSummary) {
+    println!("Live account: {}", report.account_label_masked);
+    println!("Live fingerprint: {}", report.account_fingerprint);
+    println!("Auth mode: {:?}", report.auth_mode);
+    println!("Live source: {:?}", report.source_type);
+    println!("Live credential mode: {:?}", report.credential_mode);
+    println!("Codex home: {}", report.codex_home);
+    if !report.file_entries.is_empty() {
+        println!("File entries:");
+        for entry in &report.file_entries {
+            println!(
+                "- {}  bytes={} permissions={:?}",
+                entry.relative_path, entry.byte_length, entry.permissions
+            );
+        }
+    }
+    if !report.system_entries.is_empty() {
+        println!("System entries:");
+        for entry in &report.system_entries {
+            println!(
+                "- {} / {}  {}",
+                entry.service, entry.account_label_masked, entry.masked_value_hint
+            );
+        }
+    }
 }
 
 fn print_check(report: &CheckReport) {
