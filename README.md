@@ -8,6 +8,7 @@
 - 将当前官方登录态保存为命名 profile
 - 列出、查看当前会话、切换、健康检查、同步、重命名、删除 profile
 - `check <name>` 会同时给出切换前预检结果，说明当前机器是否具备切换这个 profile 的条件
+- `check/import` 会把本机预检结果回写到 `profile.health`，让列表和桌面端状态直接反映 blocked / warning / drift 情况
 - 将 profile 导出为口令加密包，并重新导入
 - 在切换前自动备份当前会话，切换后做指纹校验，失败时自动回滚
 - 主动判断当前 live 会话是否已经偏离 active profile，并提示是否需要执行 `sync`
@@ -140,6 +141,7 @@ config.json 默认 profile 配置
 - 已实现：`doctor` / 桌面端会展示 discovery trace，直接说明每条规则是 matched、missing_input 还是 lookup_missed
 - 已实现：`doctor` / 桌面端会运行 non-destructive switch probes，帮助确认本机是否真的具备切换所需的文件系统能力
 - 已实现：`check` 会输出 per-profile preflight blocker / warning，提前暴露 system store 缺失或 probe 失败等切换阻塞因素
+- 已实现：`check/import` 会把本机 preflight blocker 或 warning 同步写回 profile 健康状态，避免列表状态与实际可切换性脱节
 - 已实现：profile 快照会记录保存时的来源平台与 system store 名称，`check` 会在跨平台 / 跨 store 使用时给出兼容性 warning
 - 已实现：`doctor` / 桌面端会汇总所有已保存 profile 的 readiness inventory，直接区分 ready / warning / blocked
 - 已实现：`doctor` / 桌面端会按依赖 store 汇总已保存 profile，直接看出哪个 store 正在挡住多少 profile
