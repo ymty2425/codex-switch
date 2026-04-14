@@ -119,6 +119,18 @@ impl DetectedSession {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotProvenance {
+    pub operating_system: String,
+    pub system_store_name: Option<String>,
+}
+
+impl Default for SnapshotProvenance {
+    fn default() -> Self {
+        Self { operating_system: "unknown".to_string(), system_store_name: None }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileVaultManifest {
     pub schema_version: u32,
     pub profile_id: ProfileId,
@@ -126,6 +138,8 @@ pub struct ProfileVaultManifest {
     pub file_entries: Vec<String>,
     pub system_entries: Vec<CredentialRef>,
     pub vault_fingerprint: String,
+    #[serde(default)]
+    pub provenance: SnapshotProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,5 +264,23 @@ mod tests {
             &[],
         );
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn legacy_manifest_defaults_unknown_provenance() {
+        let manifest: ProfileVaultManifest = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "profile_id": "123e4567-e89b-12d3-a456-426614174000",
+                "encrypted": false,
+                "file_entries": ["auth.json"],
+                "system_entries": [],
+                "vault_fingerprint": "fingerprint"
+            }"#,
+        )
+        .expect("manifest");
+
+        assert_eq!(manifest.provenance.operating_system, "unknown");
+        assert_eq!(manifest.provenance.system_store_name, None);
     }
 }

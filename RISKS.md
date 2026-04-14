@@ -37,6 +37,7 @@
 - discovery trace 解释的是本地规则展开和本地凭证查找路径；如果官方后续改了 service/account 命名，trace 仍可能全部是 lookup_missed
 - non-destructive switch probes 只能说明当前目录和锁路径在 probe 时刻可用，不代表外部进程之后不会重新占用或改写这些位置
 - profile preflight 也是本地即时判断；即使某次 `check` 显示 ready，后续环境变化仍可能让真正的 `use` 失败并进入回滚
+- snapshot provenance 记录的是保存当时的来源平台与 store，可用于兼容性提醒，但不能单独证明跨平台导入后的官方会话一定可用
 
 ### 安全擦除只能最佳努力
 

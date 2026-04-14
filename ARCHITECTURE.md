@@ -96,6 +96,7 @@
 
 - `auth.json`
 - 系统凭证引用与实际 secret 记录
+- 快照来源元数据：保存时的 `operating_system` 与可用 `system_store_name`
 
 当 detector 命中系统凭证规则时，`DetectedSession` 会被标记为 `mixed`，并把发现到的系统条目一起纳入 live fingerprint。
 
@@ -105,6 +106,12 @@
 - `config.json` 里的自定义 `credential_discovery_rules`
 
 manager 启动时会先加载标准规则，再把自定义规则追加进去。
+
+`check_profile` 的 preflight 会把 snapshot provenance 一起纳入判断：
+
+- system store 缺失时继续作为 blocker
+- profile 带系统凭证且来源平台不同，会给出 compatibility warning
+- profile 带系统凭证且来源 store 与当前 store 不同，也会给出 compatibility warning
 
 不会复制：
 

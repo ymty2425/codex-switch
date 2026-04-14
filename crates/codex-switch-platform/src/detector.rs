@@ -123,6 +123,10 @@ mod tests {
             CredentialMode::System
         }
 
+        fn store_name(&self) -> &'static str {
+            "mock_system_store"
+        }
+
         fn is_available(&self) -> bool {
             true
         }

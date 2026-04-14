@@ -1105,6 +1105,27 @@ impl ManagerService {
                     "This profile requires {} system credential entry(s), but no system credential store is available: {error}",
                     snapshot.system_records.len()
                 ));
+            } else {
+                if snapshot.manifest.provenance.operating_system != "unknown"
+                    && snapshot.manifest.provenance.operating_system != std::env::consts::OS
+                {
+                    warnings.push(format!(
+                        "This profile's system credentials were captured on {}, and the current machine is {}. Validate the switched session carefully on this platform.",
+                        snapshot.manifest.provenance.operating_system,
+                        std::env::consts::OS
+                    ));
+                }
+
+                if let (Some(saved_store_name), Some(current_store_name)) = (
+                    snapshot.manifest.provenance.system_store_name.as_deref(),
+                    self.current_system_store_name().as_deref(),
+                ) {
+                    if saved_store_name != current_store_name {
+                        warnings.push(format!(
+                            "This profile's system credentials were captured using {saved_store_name}, but the current machine is using {current_store_name}. Re-check the session after switching and run sync if it refreshes locally."
+                        ));
+                    }
+                }
             }
         }
 
@@ -1223,6 +1244,14 @@ impl ManagerService {
                     .collect(),
                 system_entries: refs,
                 vault_fingerprint: live.live_fingerprint.clone(),
+                provenance: codex_switch_domain::SnapshotProvenance {
+                    operating_system: std::env::consts::OS.to_string(),
+                    system_store_name: if live.system_entries.is_empty() {
+                        None
+                    } else {
+                        self.current_system_store_name()
+                    },
+                },
             },
             file_entries: live.file_entries.clone(),
             system_records,
@@ -1257,6 +1286,13 @@ impl ManagerService {
                     "No system credential store is available on this platform".to_string(),
                 )
             })
+    }
+
+    fn current_system_store_name(&self) -> Option<String> {
+        self.system_stores
+            .iter()
+            .find(|store| store.is_available())
+            .map(|store| store.store_name().to_string())
     }
 
     fn lock_path(&self) -> PathBuf {
@@ -1454,6 +1490,7 @@ mod tests {
 
     #[derive(Debug)]
     struct MockStore {
+        name: String,
         enabled: bool,
         available: Vec<SecretRecord>,
     }
@@ -1461,6 +1498,10 @@ mod tests {
     impl OfficialCredentialStore for MockStore {
         fn kind(&self) -> CredentialMode {
             CredentialMode::System
+        }
+
+        fn store_name(&self) -> &'static str {
+            Box::leak(self.name.clone().into_boxed_str())
         }
 
         fn is_available(&self) -> bool {
@@ -1522,6 +1563,8 @@ mod tests {
             registry,
             detector_records.clone(),
             detector_records,
+            "mock_system_store",
+            "mock_system_store",
             true,
         )
     }
@@ -1532,6 +1575,8 @@ mod tests {
         registry: CredentialDiscoveryRegistry,
         system_records: Vec<SecretRecord>,
         detector_records: Vec<SecretRecord>,
+        system_store_name: &str,
+        detector_store_name: &str,
         enabled: bool,
     ) -> ManagerService {
         let paths = PathResolver::discover(Some(codex_home), Some(app_home)).expect("paths");
@@ -1539,8 +1584,16 @@ mod tests {
             paths,
             None,
             registry,
-            vec![Box::new(MockStore { enabled, available: system_records })],
-            vec![Box::new(MockStore { enabled, available: detector_records })],
+            vec![Box::new(MockStore {
+                name: system_store_name.to_string(),
+                enabled,
+                available: system_records,
+            })],
+            vec![Box::new(MockStore {
+                name: detector_store_name.to_string(),
+                enabled,
+                available: detector_records,
+            })],
         )
         .expect("manager")
     }
@@ -1598,6 +1651,7 @@ mod tests {
         let report = manager.check_profile("alpha").expect("check");
         assert_eq!(synced.name, "alpha");
         assert!(!report.drifted);
+        let alpha_snapshot = manager.load_snapshot(saved.id).expect("alpha snapshot");
 
         let archive = manager
             .export_profile("alpha", SecretString::new("export-pass".into()), None)
@@ -1606,6 +1660,8 @@ mod tests {
             .import_profile(&archive, SecretString::new("export-pass".into()))
             .expect("import");
         assert_eq!(imported.name, "alpha-imported");
+        let imported_snapshot = manager.load_snapshot(imported.id).expect("imported snapshot");
+        assert_eq!(imported_snapshot.manifest.provenance, alpha_snapshot.manifest.provenance);
     }
 
     #[test]
@@ -1702,6 +1758,8 @@ mod tests {
             registry.clone(),
             vec![system_record.clone()],
             vec![system_record.clone()],
+            "mock_system_store",
+            "mock_system_store",
             true,
         );
         writer
@@ -1712,8 +1770,16 @@ mod tests {
             })
             .expect("save");
 
-        let checker =
-            manager_with_store_mode(codex_home, app_home, registry, Vec::new(), Vec::new(), false);
+        let checker = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
 
         let report = checker.check_profile("alpha").expect("check");
 
@@ -1763,6 +1829,101 @@ mod tests {
 
         assert_eq!(current.sync_state.status, CurrentSyncStatus::NeedsSync);
         assert!(current.sync_state.detail.contains("sync"));
+    }
+
+    #[test]
+    fn save_profile_records_snapshot_provenance() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        let saved = manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let snapshot = manager.load_snapshot(saved.id).expect("snapshot");
+
+        assert_eq!(snapshot.manifest.provenance.operating_system, std::env::consts::OS);
+        assert_eq!(snapshot.manifest.provenance.system_store_name, None);
+    }
+
+    #[test]
+    fn check_profile_warns_when_snapshot_came_from_different_system_store() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+
+        let writer = manager_with_store_mode(
+            codex_home.clone(),
+            app_home.clone(),
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            "macos_keychain",
+            "macos_keychain",
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let checker = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            vec![system_record],
+            Vec::new(),
+            "linux_keyring",
+            "linux_keyring",
+            true,
+        );
+
+        let report = checker.check_profile("alpha").expect("check");
+
+        assert!(report.preflight.ready);
+        assert!(
+            report
+                .preflight
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("macos_keychain")
+                    && warning.contains("linux_keyring"))
+        );
     }
 
     #[test]
