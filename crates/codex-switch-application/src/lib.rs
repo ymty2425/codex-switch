@@ -1,6 +1,6 @@
 pub mod manager;
 
 pub use manager::{
-    CheckReport, CurrentStatus, ManagerOptions, ManagerService, SaveProfileRequest,
-    UseProfileRequest,
+    CheckReport, CurrentStatus, CurrentSyncState, CurrentSyncStatus, ManagerOptions,
+    ManagerService, SaveProfileRequest, UseProfileRequest,
 };

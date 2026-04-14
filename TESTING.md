@@ -36,6 +36,7 @@ cargo test -p codex-switch-application
 
 - `save -> use -> current -> sync -> export -> import`
 - active profile 的 drift 检测
+- `current` 对 active profile 漂移后的 `needs_sync` 状态判断
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI

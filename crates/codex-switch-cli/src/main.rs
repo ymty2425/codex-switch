@@ -217,6 +217,8 @@ fn print_current(current: &CurrentStatus) {
     } else {
         println!("Active profile: none");
     }
+    println!("Sync status: {:?}", current.sync_state.status);
+    println!("{}", current.sync_state.detail);
 }
 
 fn print_check(report: &CheckReport) {
