@@ -7,6 +7,7 @@
 - 发现 `CODEX_HOME` 或默认 `~/.codex` 目录里的官方本地认证文件
 - 将当前官方登录态保存为命名 profile
 - 列出、查看当前会话、切换、健康检查、同步、重命名、删除 profile
+- `check <name>` 会同时给出切换前预检结果，说明当前机器是否具备切换这个 profile 的条件
 - 将 profile 导出为口令加密包，并重新导入
 - 在切换前自动备份当前会话，切换后做指纹校验，失败时自动回滚
 - 主动判断当前 live 会话是否已经偏离 active profile，并提示是否需要执行 `sync`
@@ -138,6 +139,7 @@ config.json 默认 profile 配置
 - 已实现：`doctor` 平台就绪度报告，可用于实机验证 auth 文件、store 可用性与 discovery rules 配置
 - 已实现：`doctor` / 桌面端会展示 discovery trace，直接说明每条规则是 matched、missing_input 还是 lookup_missed
 - 已实现：`doctor` / 桌面端会运行 non-destructive switch probes，帮助确认本机是否真的具备切换所需的文件系统能力
+- 已实现：`check` 会输出 per-profile preflight blocker / warning，提前暴露 system store 缺失或 probe 失败等切换阻塞因素
 - 已实现：`bundle` 脱敏诊断包导出，适合收集平台状态、profile 元数据和审计尾部用于实机排障
 - 已实现：CLI 和桌面端的当前状态传输已做脱敏，不再把 `auth.json` 原文暴露给 UI 或 `detect/current` JSON 输出
 - 已实现：`recover` 显式恢复未完成切换事务，并在 `doctor` / 桌面端暴露 pending transaction 状态

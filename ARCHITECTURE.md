@@ -43,6 +43,7 @@
 - `current_status`
 - `use_profile`
 - `check_profile`
+  - 当前除 drift 检查外，还会执行 profile 级 preflight
 - `sync_active_profile`
 - `rename_profile`
 - `delete_profile`
