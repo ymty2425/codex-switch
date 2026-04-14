@@ -128,9 +128,24 @@ pub struct DoctorReport {
     pub discovery_rule_count: usize,
     pub live_session: DoctorLiveSessionStatus,
     pub discovery_trace: DiscoveryTraceReport,
+    pub switch_probes: SwitchProbeReport,
     pub stores: Vec<codex_switch_platform::StoreDiagnostic>,
     pub recovery: RecoveryStatus,
     pub recommended_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeStatus {
+    pub ok: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SwitchProbeReport {
+    pub data_dir_write: ProbeStatus,
+    pub lock_acquire: ProbeStatus,
+    pub atomic_swap: ProbeStatus,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -507,11 +522,13 @@ impl ManagerService {
         };
         let stores = default_store_diagnostics();
         let discovery_trace = self.build_discovery_trace();
+        let switch_probes = self.run_switch_probes();
         let recovery = self.inspect_recovery_status()?;
         let recommended_actions = self.build_doctor_recommendations(
             auth_file_exists,
             &live_session,
             &discovery_trace,
+            &switch_probes,
             &stores,
             &recovery,
         );
@@ -528,6 +545,7 @@ impl ManagerService {
             discovery_rule_count: self.discovery_rule_count,
             live_session,
             discovery_trace,
+            switch_probes,
             stores,
             recovery,
             recommended_actions,
@@ -815,6 +833,7 @@ impl ManagerService {
         auth_file_exists: bool,
         live_session: &DoctorLiveSessionStatus,
         discovery_trace: &DiscoveryTraceReport,
+        switch_probes: &SwitchProbeReport,
         stores: &[codex_switch_platform::StoreDiagnostic],
         recovery: &RecoveryStatus,
     ) -> Vec<String> {
@@ -863,6 +882,16 @@ impl ManagerService {
             );
         }
 
+        if !switch_probes.data_dir_write.ok
+            || !switch_probes.lock_acquire.ok
+            || !switch_probes.atomic_swap.ok
+        {
+            recommendations.push(
+                "One or more non-destructive switch probes failed. Review data-dir, lock, and atomic-swap readiness before switching profiles on this machine."
+                    .to_string(),
+            );
+        }
+
         if recovery.pending_count > 0 {
             recommendations.push(
                 "Interrupted switch state was found. Run recover before saving or switching profiles again."
@@ -871,6 +900,99 @@ impl ManagerService {
         }
 
         recommendations
+    }
+
+    fn run_switch_probes(&self) -> SwitchProbeReport {
+        let data_dir_write = self.probe_data_dir_write();
+        let lock_acquire = self.probe_lock_acquire();
+        let atomic_swap = self.probe_atomic_swap();
+        let ok_count = [data_dir_write.ok, lock_acquire.ok, atomic_swap.ok]
+            .into_iter()
+            .filter(|ok| *ok)
+            .count();
+        let detail = format!("{ok_count}/3 non-destructive switch probes succeeded.");
+
+        SwitchProbeReport { data_dir_write, lock_acquire, atomic_swap, detail }
+    }
+
+    fn probe_data_dir_write(&self) -> ProbeStatus {
+        let probe_path = self.paths.data_dir.join(format!(".probe-write-{}", Uuid::new_v4()));
+        match atomic_write(&probe_path, b"probe") {
+            Ok(()) => {
+                let _ = secure_delete(&probe_path);
+                ProbeStatus {
+                    ok: true,
+                    detail: format!(
+                        "Able to create and remove a probe file in {}.",
+                        self.paths.data_dir.display()
+                    ),
+                }
+            }
+            Err(error) => ProbeStatus {
+                ok: false,
+                detail: format!(
+                    "Could not write a probe file in {}: {error}",
+                    self.paths.data_dir.display()
+                ),
+            },
+        }
+    }
+
+    fn probe_lock_acquire(&self) -> ProbeStatus {
+        match GlobalSwitchLock::acquire(self.lock_path()) {
+            Ok(_guard) => ProbeStatus {
+                ok: true,
+                detail: format!(
+                    "Successfully acquired and released {}.",
+                    self.lock_path().display()
+                ),
+            },
+            Err(error) => ProbeStatus {
+                ok: false,
+                detail: format!("Could not acquire {}: {error}", self.lock_path().display()),
+            },
+        }
+    }
+
+    fn probe_atomic_swap(&self) -> ProbeStatus {
+        if !self.paths.codex_home.exists() {
+            return ProbeStatus {
+                ok: false,
+                detail: format!(
+                    "{} does not exist, so atomic swap cannot be rehearsed.",
+                    self.paths.codex_home.display()
+                ),
+            };
+        }
+
+        let source = self.paths.codex_home.join(format!(".probe-source-{}", Uuid::new_v4()));
+        let target = self.paths.codex_home.join(format!(".probe-target-{}", Uuid::new_v4()));
+        let result = (|| -> Result<()> {
+            atomic_write(&source, b"probe")?;
+            fs::rename(&source, &target)?;
+            secure_delete(&target)?;
+            Ok(())
+        })();
+
+        let _ = secure_delete(&source);
+        let _ = secure_delete(&target);
+
+        match result {
+            Ok(()) => ProbeStatus {
+                ok: true,
+                detail: format!(
+                    "Successfully created, renamed, and removed a probe file under {}.",
+                    self.paths.codex_home.display()
+                ),
+            },
+            Err(error) => ProbeStatus {
+                ok: false,
+                detail: format!(
+                    "Could not complete an atomic swap rehearsal under {}: {error}",
+                    self.paths.codex_home.display()
+                ),
+            },
+        }
     }
 
     fn build_discovery_trace(&self) -> DiscoveryTraceReport {
@@ -1769,6 +1891,29 @@ mod tests {
                 .any(|entry| entry.account_label_masked.as_deref() == Some("acct_****stom"))
         );
         assert!(!json.contains("acct-custom"));
+    }
+
+    #[test]
+    fn doctor_report_includes_switch_probe_results() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(report.switch_probes.data_dir_write.ok);
+        assert!(report.switch_probes.lock_acquire.ok);
+        assert!(report.switch_probes.atomic_swap.ok);
     }
 
     #[test]

@@ -71,6 +71,21 @@ type DashboardData = {
         detail: string;
       }>;
     };
+    switch_probes: {
+      detail: string;
+      data_dir_write: {
+        ok: boolean;
+        detail: string;
+      };
+      lock_acquire: {
+        ok: boolean;
+        detail: string;
+      };
+      atomic_swap: {
+        ok: boolean;
+        detail: string;
+      };
+    };
     stores: Array<{
       name: string;
       supported: boolean;
@@ -513,6 +528,17 @@ export function App() {
               Recover Interrupted Switches
             </button>
           </div>
+          <div className="doctor-card">
+            <div className="stat-label">Switch Probes</div>
+            <div className="stat-value">
+              {dashboard?.doctor.switch_probes.detail ?? "No probe detail."}
+            </div>
+            <p className="muted">
+              data_dir={String(dashboard?.doctor.switch_probes.data_dir_write.ok ?? false)} lock=
+              {String(dashboard?.doctor.switch_probes.lock_acquire.ok ?? false)} atomic_swap=
+              {String(dashboard?.doctor.switch_probes.atomic_swap.ok ?? false)}
+            </p>
+          </div>
         </div>
         <div className="store-list">
           {dashboard?.doctor.stores.map((store) => (
@@ -558,6 +584,11 @@ export function App() {
             ))}
           </div>
         )}
+        <div className="doctor-actions">
+          <p className="muted">{dashboard?.doctor.switch_probes.data_dir_write.detail}</p>
+          <p className="muted">{dashboard?.doctor.switch_probes.lock_acquire.detail}</p>
+          <p className="muted">{dashboard?.doctor.switch_probes.atomic_swap.detail}</p>
+        </div>
       </section>
 
       <section className="panel">

@@ -78,6 +78,7 @@ npm --workspace apps/desktop run tauri dev
 - 平台就绪度面板，显示 auth 文件、discovery rules 与系统凭证 store 状态
 - 平台就绪度面板，显示 discovery trace，帮助定位规则是命中、缺少输入还是查找落空
 - 平台就绪度面板，显示待恢复事务并允许手动执行恢复
+- 平台就绪度面板，运行非破坏性切换探针，检查数据目录写入、全局锁和同目录原子替换
 - 当前会话是否需要同步的状态提示
 - profile 列表
 - 保存当前账号
@@ -136,6 +137,7 @@ config.json 默认 profile 配置
 - 已实现：系统凭证规则注册表，支持根据 `auth.json` 里的 `email`、`sub`、`account_id` 线索做 mixed-mode 启发式发现
 - 已实现：`doctor` 平台就绪度报告，可用于实机验证 auth 文件、store 可用性与 discovery rules 配置
 - 已实现：`doctor` / 桌面端会展示 discovery trace，直接说明每条规则是 matched、missing_input 还是 lookup_missed
+- 已实现：`doctor` / 桌面端会运行 non-destructive switch probes，帮助确认本机是否真的具备切换所需的文件系统能力
 - 已实现：`bundle` 脱敏诊断包导出，适合收集平台状态、profile 元数据和审计尾部用于实机排障
 - 已实现：CLI 和桌面端的当前状态传输已做脱敏，不再把 `auth.json` 原文暴露给 UI 或 `detect/current` JSON 输出
 - 已实现：`recover` 显式恢复未完成切换事务，并在 `doctor` / 桌面端暴露 pending transaction 状态
