@@ -38,6 +38,7 @@ apps/
 cargo run -p codex-switch-cli -- detect
 cargo run -p codex-switch-cli -- doctor
 cargo run -p codex-switch-cli -- bundle
+cargo run -p codex-switch-cli -- recover
 cargo run -p codex-switch-cli -- save personal --note "Daily driver" --default
 cargo run -p codex-switch-cli -- list
 cargo run -p codex-switch-cli -- use personal
@@ -75,6 +76,7 @@ npm --workspace apps/desktop run tauri dev
 
 - 当前账号展示
 - 平台就绪度面板，显示 auth 文件、discovery rules 与系统凭证 store 状态
+- 平台就绪度面板，显示待恢复事务并允许手动执行恢复
 - 当前会话是否需要同步的状态提示
 - profile 列表
 - 保存当前账号
@@ -134,6 +136,7 @@ config.json 默认 profile 配置
 - 已实现：`doctor` 平台就绪度报告，可用于实机验证 auth 文件、store 可用性与 discovery rules 配置
 - 已实现：`bundle` 脱敏诊断包导出，适合收集平台状态、profile 元数据和审计尾部用于实机排障
 - 已实现：CLI 和桌面端的当前状态传输已做脱敏，不再把 `auth.json` 原文暴露给 UI 或 `detect/current` JSON 输出
+- 已实现：`recover` 显式恢复未完成切换事务，并在 `doctor` / 桌面端暴露 pending transaction 状态
 - 已搭好适配层：macOS Keychain、Linux Secret Service、Windows Credential Manager
 - 下一步重点：补更多官方条目规则、扩展更多本地状态源、做三平台实机验证
 

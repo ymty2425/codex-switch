@@ -48,6 +48,7 @@
 - `delete_profile`
 - `export_profile`
 - `export_diagnostic_bundle`
+- `recover_pending_transactions`
 - `import_profile`
 
 这层同时管理：
@@ -58,6 +59,7 @@
 - 当前绑定状态
 - 当前 live 会话与 active profile 的同步状态
 - 平台就绪度诊断输出
+- 未完成切换事务的可见性与显式恢复
 - 对 CLI / Tauri 暴露的脱敏 live session 摘要
 - 切换事务日志
 - 审计日志

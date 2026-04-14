@@ -62,6 +62,17 @@ type DashboardData = {
       available: boolean;
       detail: string;
     }>;
+    recovery: {
+      pending_count: number;
+      rollback_required_count: number;
+      detail: string;
+      transactions: Array<{
+        txn_id: string;
+        started_at: string;
+        phase: string;
+        rollback_required: boolean;
+      }>;
+    };
     recommended_actions: string[];
   };
   profiles: ProfileMeta[];
@@ -72,6 +83,18 @@ type CheckReport = {
   detail: string;
   drifted: boolean;
   profile: ProfileMeta;
+};
+
+type RecoveryReport = {
+  recovered_count: number;
+  removed_count: number;
+  detail: string;
+  transactions: Array<{
+    txn_id: string;
+    started_at: string;
+    phase: string;
+    rollback_required: boolean;
+  }>;
 };
 
 export function App() {
@@ -268,6 +291,17 @@ export function App() {
     }
   }
 
+  async function handleRecover() {
+    try {
+      const report = await invoke<RecoveryReport>("recover_pending_transactions");
+      const data = await invoke<DashboardData>("dashboard");
+      setDashboard(data);
+      setStatus(report.detail);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -449,6 +483,19 @@ export function App() {
             <div className="stat-value">{dashboard?.doctor.discovery_rule_count ?? 0}</div>
             <p className="muted">{dashboard?.doctor.live_session.detail ?? "No session detail."}</p>
           </div>
+          <div className="doctor-card">
+            <div className="stat-label">Recovery</div>
+            <div className="stat-value">{dashboard?.doctor.recovery.pending_count ?? 0}</div>
+            <p className="muted">{dashboard?.doctor.recovery.detail ?? "No recovery detail."}</p>
+            <button
+              className="ghost"
+              disabled={!dashboard?.doctor.recovery.pending_count}
+              onClick={() => void handleRecover()}
+              type="button"
+            >
+              Recover Interrupted Switches
+            </button>
+          </div>
         </div>
         <div className="store-list">
           {dashboard?.doctor.stores.map((store) => (
@@ -470,6 +517,16 @@ export function App() {
             {dashboard.doctor.recommended_actions.map((action) => (
               <p className="muted" key={action}>
                 {action}
+              </p>
+            ))}
+          </div>
+        )}
+        {!!dashboard?.doctor.recovery.transactions.length && (
+          <div className="doctor-actions">
+            {dashboard.doctor.recovery.transactions.map((txn) => (
+              <p className="muted" key={txn.txn_id}>
+                {txn.txn_id} · {txn.phase} · rollback_required=
+                {String(txn.rollback_required)}
               </p>
             ))}
           </div>
