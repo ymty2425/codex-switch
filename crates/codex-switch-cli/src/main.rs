@@ -310,6 +310,17 @@ fn print_doctor(report: &DoctorReport) {
     if let Some(account) = &report.live_session.account_label_masked {
         println!("Detected account: {account}");
     }
+    println!("{}", report.discovery_trace.detail);
+    for entry in &report.discovery_trace.entries {
+        println!(
+            "Trace {}  status={:?} service={} account={}  {}",
+            entry.rule_name,
+            entry.status,
+            entry.service.as_deref().unwrap_or("-"),
+            entry.account_label_masked.as_deref().unwrap_or("-"),
+            entry.detail
+        );
+    }
     for store in &report.stores {
         println!(
             "Store {}  supported={} available={}  {}",

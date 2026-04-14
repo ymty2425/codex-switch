@@ -59,6 +59,7 @@
 - 当前绑定状态
 - 当前 live 会话与 active profile 的同步状态
 - 平台就绪度诊断输出
+- 系统凭证 discovery trace，可见每条规则的展开和查找状态
 - 未完成切换事务的可见性与显式恢复
 - 对 CLI / Tauri 暴露的脱敏 live session 摘要
 - 切换事务日志

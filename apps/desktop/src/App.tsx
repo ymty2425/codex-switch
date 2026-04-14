@@ -56,6 +56,21 @@ type DashboardData = {
       source_type?: string | null;
       credential_mode?: string | null;
     };
+    discovery_trace: {
+      matched_count: number;
+      missing_input_count: number;
+      lookup_missed_count: number;
+      blocked_count: number;
+      detail: string;
+      entries: Array<{
+        rule_name: string;
+        service?: string | null;
+        account_label_masked?: string | null;
+        label?: string | null;
+        status: string;
+        detail: string;
+      }>;
+    };
     stores: Array<{
       name: string;
       supported: boolean;
@@ -481,7 +496,9 @@ export function App() {
           <div className="doctor-card">
             <div className="stat-label">Discovery Rules</div>
             <div className="stat-value">{dashboard?.doctor.discovery_rule_count ?? 0}</div>
-            <p className="muted">{dashboard?.doctor.live_session.detail ?? "No session detail."}</p>
+            <p className="muted">
+              {dashboard?.doctor.discovery_trace.detail ?? "No discovery trace detail."}
+            </p>
           </div>
           <div className="doctor-card">
             <div className="stat-label">Recovery</div>
@@ -517,6 +534,16 @@ export function App() {
             {dashboard.doctor.recommended_actions.map((action) => (
               <p className="muted" key={action}>
                 {action}
+              </p>
+            ))}
+          </div>
+        )}
+        {!!dashboard?.doctor.discovery_trace.entries.length && (
+          <div className="doctor-actions">
+            {dashboard.doctor.discovery_trace.entries.map((entry) => (
+              <p className="muted" key={`${entry.rule_name}-${entry.status}-${entry.service}`}>
+                {entry.rule_name} · {entry.status} · {entry.service ?? "-"} ·{" "}
+                {entry.account_label_masked ?? "-"}
               </p>
             ))}
           </div>
