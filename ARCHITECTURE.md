@@ -61,6 +61,7 @@
 - 当前 live 会话与 active profile 的同步状态
 - 平台就绪度诊断输出
 - 全量 profile readiness inventory，可在 `doctor` 中汇总每个 profile 的 ready / warning / blocked 状态
+- store usage summary，可在 `doctor` 中按依赖 store 汇总 profile 数量与 blocked / warning 分布
 - 系统凭证 discovery trace，可见每条规则的展开和查找状态
 - non-destructive switch probes，可见锁文件、数据目录和同目录 rename 的就绪度
 - 未完成切换事务的可见性与显式恢复
@@ -119,6 +120,13 @@ manager 启动时会先加载标准规则，再把自定义规则追加进去。
 - `ready`：当前机器没有 blocker，也没有额外 warning
 - `warning`：可以切换，但存在 drift 或平台 / store 兼容性提示
 - `blocked`：当前机器存在明确切换阻塞因素
+
+在此基础上，`doctor_report` 还会生成 store usage summary：
+
+- 按 `source_system_store_name` 聚合所有已保存 profile
+- 对没有 system store 依赖的 profile 归并到 `file_only`
+- 汇总每个 store 的 ready / warning / blocked 数量
+- 当某个 store 当前挡住 profile 时，recommendation 会点名该 store
 
 不会复制：
 

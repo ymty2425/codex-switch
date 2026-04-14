@@ -146,6 +146,18 @@ pub struct DoctorProfileReadiness {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DoctorStoreUsageSummary {
+    pub store_name: String,
+    pub profile_count: usize,
+    pub ready_count: usize,
+    pub warning_count: usize,
+    pub blocked_count: usize,
+    pub supported: Option<bool>,
+    pub available: Option<bool>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DoctorReport {
     pub operating_system: String,
     pub codex_home: String,
@@ -158,6 +170,7 @@ pub struct DoctorReport {
     pub stores: Vec<codex_switch_platform::StoreDiagnostic>,
     pub recovery: RecoveryStatus,
     pub profile_readiness: Vec<DoctorProfileReadiness>,
+    pub store_usage: Vec<DoctorStoreUsageSummary>,
     pub recommended_actions: Vec<String>,
 }
 
@@ -556,6 +569,7 @@ impl ManagerService {
         let binding = self.read_binding()?;
         let profile_readiness =
             self.build_doctor_profile_readiness(&binding, live_detection.as_ref().ok())?;
+        let store_usage = Self::build_doctor_store_usage(&profile_readiness, &stores);
         let recommended_actions = self.build_doctor_recommendations(
             auth_file_exists,
             &live_session,
@@ -564,6 +578,7 @@ impl ManagerService {
             &stores,
             &recovery,
             &profile_readiness,
+            &store_usage,
         );
 
         Ok(DoctorReport {
@@ -582,6 +597,7 @@ impl ManagerService {
             stores,
             recovery,
             profile_readiness,
+            store_usage,
             recommended_actions,
         })
     }
@@ -871,6 +887,7 @@ impl ManagerService {
         stores: &[codex_switch_platform::StoreDiagnostic],
         recovery: &RecoveryStatus,
         profile_readiness: &[DoctorProfileReadiness],
+        store_usage: &[DoctorStoreUsageSummary],
     ) -> Vec<String> {
         let mut recommendations = Vec::new();
 
@@ -953,6 +970,17 @@ impl ManagerService {
             ));
         }
 
+        for usage in store_usage
+            .iter()
+            .filter(|usage| usage.store_name != "file_only" && usage.blocked_count > 0)
+        {
+            recommendations.push(format!(
+                "{} currently has {} blocked saved profile(s). Review the store summary before switching those profiles on this machine.",
+                usage.store_name,
+                usage.blocked_count
+            ));
+        }
+
         recommendations
     }
 
@@ -1015,6 +1043,92 @@ impl ManagerService {
             }
         }
         Ok(readiness)
+    }
+
+    fn build_doctor_store_usage(
+        profile_readiness: &[DoctorProfileReadiness],
+        stores: &[codex_switch_platform::StoreDiagnostic],
+    ) -> Vec<DoctorStoreUsageSummary> {
+        use std::collections::BTreeMap;
+
+        #[derive(Default)]
+        struct Counts {
+            profile_count: usize,
+            ready_count: usize,
+            warning_count: usize,
+            blocked_count: usize,
+        }
+
+        let mut grouped: BTreeMap<String, Counts> = BTreeMap::new();
+        for profile in profile_readiness {
+            let key =
+                profile.source_system_store_name.clone().unwrap_or_else(|| "file_only".to_string());
+            let counts = grouped.entry(key).or_default();
+            counts.profile_count += 1;
+            match profile.status.as_str() {
+                "ready" => counts.ready_count += 1,
+                "warning" => counts.warning_count += 1,
+                _ => counts.blocked_count += 1,
+            }
+        }
+
+        grouped
+            .into_iter()
+            .map(|(store_name, counts)| {
+                let diagnostic = stores.iter().find(|store| store.name == store_name);
+                let (supported, available, detail) = if store_name == "file_only" {
+                    (
+                        Some(true),
+                        Some(true),
+                        format!(
+                            "{} saved profile(s) are file-backed only; ready={} warning={} blocked={}.",
+                            counts.profile_count,
+                            counts.ready_count,
+                            counts.warning_count,
+                            counts.blocked_count
+                        ),
+                    )
+                } else if let Some(diagnostic) = diagnostic {
+                    (
+                        Some(diagnostic.supported),
+                        Some(diagnostic.available),
+                        format!(
+                            "{} saved profile(s) depend on {}; ready={} warning={} blocked={}. {}",
+                            counts.profile_count,
+                            store_name,
+                            counts.ready_count,
+                            counts.warning_count,
+                            counts.blocked_count,
+                            diagnostic.detail
+                        ),
+                    )
+                } else {
+                    (
+                        None,
+                        None,
+                        format!(
+                            "{} saved profile(s) depend on {}; ready={} warning={} blocked={}. No runtime diagnostic is available for this store name.",
+                            counts.profile_count,
+                            store_name,
+                            counts.ready_count,
+                            counts.warning_count,
+                            counts.blocked_count
+                        ),
+                    )
+                };
+
+                DoctorStoreUsageSummary {
+                    store_name,
+                    profile_count: counts.profile_count,
+                    ready_count: counts.ready_count,
+                    warning_count: counts.warning_count,
+                    blocked_count: counts.blocked_count,
+                    supported,
+                    available,
+                    detail,
+                }
+            })
+            .collect()
     }
 
     fn run_switch_probes(&self) -> SwitchProbeReport {
@@ -2501,6 +2615,162 @@ mod tests {
         assert!(report.recommended_actions.iter().any(|action| {
             action.contains("blocked profile") || action.contains("profile inventory")
         }));
+    }
+
+    #[test]
+    fn doctor_report_includes_store_usage_summary() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save alpha");
+
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth custom");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+        let writer = manager_with_store_mode(
+            codex_home.clone(),
+            app_home.clone(),
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            "macos_keychain",
+            "macos_keychain",
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "beta".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save beta");
+
+        let checker = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            vec![system_record],
+            Vec::new(),
+            "linux_keyring",
+            "linux_keyring",
+            true,
+        );
+
+        let report = checker.doctor_report().expect("doctor");
+        let file_only = report
+            .store_usage
+            .iter()
+            .find(|entry| entry.store_name == "file_only")
+            .expect("file_only");
+        let macos = report
+            .store_usage
+            .iter()
+            .find(|entry| entry.store_name == "macos_keychain")
+            .expect("macos");
+
+        assert_eq!(file_only.profile_count, 1);
+        assert_eq!(file_only.ready_count, 1);
+        assert_eq!(macos.profile_count, 1);
+        assert_eq!(macos.warning_count, 1);
+    }
+
+    #[test]
+    fn doctor_report_recommends_reviewing_blocked_store_dependencies() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+
+        let writer = manager_with_store_mode(
+            codex_home.clone(),
+            app_home.clone(),
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            "macos_keychain",
+            "macos_keychain",
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "beta".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save beta");
+
+        let checker = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            Vec::new(),
+            Vec::new(),
+            "linux_keyring",
+            "linux_keyring",
+            false,
+        );
+
+        let report = checker.doctor_report().expect("doctor");
+
+        assert!(
+            report
+                .store_usage
+                .iter()
+                .any(|entry| { entry.store_name == "macos_keychain" && entry.blocked_count == 1 })
+        );
+        assert!(
+            report
+                .recommended_actions
+                .iter()
+                .any(|action| { action.contains("macos_keychain") && action.contains("blocked") })
+        );
     }
 
     #[test]
