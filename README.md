@@ -74,6 +74,8 @@ npm --workspace apps/desktop run tauri dev
 - profile 列表
 - 保存当前账号
 - 切换 profile
+- 设置默认 profile
+- 重命名、删除、导入、导出 profile
 - 健康检查
 - 同步刷新后的会话
 - 查看审计日志

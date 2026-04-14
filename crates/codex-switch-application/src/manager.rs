@@ -355,6 +355,15 @@ impl ManagerService {
         Ok(profile)
     }
 
+    pub fn set_default_profile_by_name(&self, name: &str) -> Result<ProfileMeta> {
+        self.ensure_layout()?;
+        let profile = self.find_profile_by_name(name)?;
+        self.set_default_profile(Some(profile.id))?;
+        let updated = self.read_profile_by_id(profile.id)?;
+        self.append_audit("default", &format!("Set profile '{}' as default", updated.name))?;
+        Ok(updated)
+    }
+
     pub fn delete_profile(&self, name: &str) -> Result<()> {
         self.ensure_layout()?;
         let profile = self.find_profile_by_name(name)?;
@@ -934,6 +943,50 @@ mod tests {
 
         assert_eq!(current.sync_state.status, CurrentSyncStatus::InSync);
         assert!(current.sync_state.detail.contains("synced"));
+    }
+
+    #[test]
+    fn can_set_default_profile_without_switching_active_session() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save alpha");
+
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-beta", "2026-04-13T01:00:00Z"))
+            .expect("auth2");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "beta".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save beta");
+
+        let live_before = manager.detect().expect("live before");
+        let updated = manager.set_default_profile_by_name("alpha").expect("set default");
+        let current = manager.current_status().expect("current");
+        let profiles = manager.list_profiles().expect("profiles");
+
+        assert_eq!(updated.name, "alpha");
+        assert!(updated.is_default);
+        assert!(current.active_profile.is_none());
+        assert_eq!(current.live_session.live_fingerprint, live_before.live_fingerprint);
+        assert_eq!(profiles.iter().filter(|profile| profile.is_default).count(), 1);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 type HealthStatus = "healthy" | "drifted" | "invalid" | "missing" | "unknown";
 
@@ -55,6 +56,7 @@ export function App() {
   const [saveName, setSaveName] = useState("");
   const [saveNote, setSaveNote] = useState("");
   const [saveDefault, setSaveDefault] = useState(false);
+  const [transferPassphrase, setTransferPassphrase] = useState("");
 
   async function loadDashboard() {
     try {
@@ -119,6 +121,104 @@ export function App() {
       const report = await invoke<CheckReport>("check_profile", { name });
       setStatus(report.detail);
       await loadDashboard();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleSetDefault(name: string) {
+    try {
+      const data = await invoke<DashboardData>("set_default_profile", { name });
+      setDashboard(data);
+      setStatus(`Marked "${name}" as the default profile.`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleRename(oldName: string) {
+    const newName = window.prompt("Rename profile", oldName)?.trim();
+    if (!newName || newName === oldName) {
+      return;
+    }
+
+    try {
+      const data = await invoke<DashboardData>("rename_profile", {
+        payload: { oldName, newName },
+      });
+      setDashboard(data);
+      setStatus(`Renamed "${oldName}" to "${newName}".`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleDelete(name: string) {
+    if (!window.confirm(`Delete profile "${name}"? This removes the saved snapshot.`)) {
+      return;
+    }
+
+    try {
+      const data = await invoke<DashboardData>("delete_profile", { name });
+      setDashboard(data);
+      setStatus(`Deleted profile "${name}".`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleExport(name: string) {
+    if (!transferPassphrase.trim()) {
+      setError("Enter a transfer passphrase before exporting or importing.");
+      return;
+    }
+
+    try {
+      const output = await save({
+        defaultPath: `${name}.cxswitch`,
+        filters: [{ name: "Session Archives", extensions: ["cxswitch"] }],
+      });
+      if (!output) {
+        return;
+      }
+
+      const archive = await invoke<string>("export_profile", {
+        payload: {
+          name,
+          passphrase: transferPassphrase,
+          output,
+        },
+      });
+      setStatus(`Exported "${name}" to ${archive}.`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleImport() {
+    if (!transferPassphrase.trim()) {
+      setError("Enter a transfer passphrase before exporting or importing.");
+      return;
+    }
+
+    try {
+      const path = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Session Archives", extensions: ["cxswitch"] }],
+      });
+      if (!path || Array.isArray(path)) {
+        return;
+      }
+
+      const data = await invoke<DashboardData>("import_profile", {
+        payload: {
+          path,
+          passphrase: transferPassphrase,
+        },
+      });
+      setDashboard(data);
+      setStatus(`Imported profile archive from ${path}.`);
     } catch (err) {
       setError(String(err));
     }
@@ -210,6 +310,20 @@ export function App() {
               Save Profile
             </button>
           </form>
+          <div className="transfer-tools">
+            <label>
+              Transfer passphrase
+              <input
+                type="password"
+                value={transferPassphrase}
+                onChange={(event) => setTransferPassphrase(event.target.value)}
+                placeholder="Used for export and import"
+              />
+            </label>
+            <button className="ghost" onClick={() => void handleImport()} type="button">
+              Import Profile Archive
+            </button>
+          </div>
           <p className="status">{status}</p>
           {error ? <p className="error">{error}</p> : null}
         </article>
@@ -240,6 +354,22 @@ export function App() {
                   </button>
                   <button className="ghost" onClick={() => void handleCheck(profile.name)}>
                     Health Check
+                  </button>
+                  <button
+                    className="ghost"
+                    disabled={profile.is_default}
+                    onClick={() => void handleSetDefault(profile.name)}
+                  >
+                    Set Default
+                  </button>
+                  <button className="ghost" onClick={() => void handleRename(profile.name)}>
+                    Rename
+                  </button>
+                  <button className="ghost" onClick={() => void handleExport(profile.name)}>
+                    Export
+                  </button>
+                  <button className="danger" onClick={() => void handleDelete(profile.name)}>
+                    Delete
                   </button>
                 </div>
               </div>
