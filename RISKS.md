@@ -35,6 +35,7 @@
 - 当前新增的诊断包是脱敏 JSON，适合排障，但仍会暴露路径、脱敏账号标签、profile 名称和系统环境摘要，因此不应公开分享
 - `recover` 只处理当前能正确解析的事务文件；如果磁盘上存在损坏的事务 JSON，仍可能需要人工清理
 - discovery trace 解释的是本地规则展开和本地凭证查找路径；如果官方后续改了 service/account 命名，trace 仍可能全部是 lookup_missed
+- non-destructive switch probes 只能说明当前目录和锁路径在 probe 时刻可用，不代表外部进程之后不会重新占用或改写这些位置
 
 ### 安全擦除只能最佳努力
 

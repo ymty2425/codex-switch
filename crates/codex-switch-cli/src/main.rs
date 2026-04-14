@@ -321,6 +321,19 @@ fn print_doctor(report: &DoctorReport) {
             entry.detail
         );
     }
+    println!("{}", report.switch_probes.detail);
+    println!(
+        "Probe data_dir_write ok={}  {}",
+        report.switch_probes.data_dir_write.ok, report.switch_probes.data_dir_write.detail
+    );
+    println!(
+        "Probe lock_acquire ok={}  {}",
+        report.switch_probes.lock_acquire.ok, report.switch_probes.lock_acquire.detail
+    );
+    println!(
+        "Probe atomic_swap ok={}  {}",
+        report.switch_probes.atomic_swap.ok, report.switch_probes.atomic_swap.detail
+    );
     for store in &report.stores {
         println!(
             "Store {}  supported={} available={}  {}",
