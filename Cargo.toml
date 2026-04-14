@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "crates/codex-switch-domain",
+    "crates/codex-switch-platform",
+    "crates/codex-switch-application",
+    "crates/codex-switch-cli",
+    "apps/desktop/src-tauri",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+authors = ["Codex Switch Contributors"]
+
+[workspace.dependencies]
+aes-gcm-siv = "0.11.1"
+base64 = "0.22.1"
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4.5.49", features = ["derive"] }
+directories = "6.0.0"
+fs4 = "0.13.1"
+hex = "0.4.3"
+pbkdf2 = "0.12.2"
+rand = "0.8.5"
+secrecy = { version = "0.10.3", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+toml = "0.9.8"
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+which = "8.0.0"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
