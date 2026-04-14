@@ -354,6 +354,22 @@ fn print_doctor(report: &DoctorReport) {
             store.name, store.supported, store.available, store.detail
         );
     }
+    if !report.store_usage.is_empty() {
+        println!("Store usage:");
+        for usage in &report.store_usage {
+            println!(
+                "Store {}  profiles={} ready={} warning={} blocked={} supported={} available={}  {}",
+                usage.store_name,
+                usage.profile_count,
+                usage.ready_count,
+                usage.warning_count,
+                usage.blocked_count,
+                usage.supported.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+                usage.available.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+                usage.detail
+            );
+        }
+    }
     println!(
         "Pending transactions: {}  rollback_required={}",
         report.recovery.pending_count, report.recovery.rollback_required_count

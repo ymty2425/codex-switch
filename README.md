@@ -142,6 +142,7 @@ config.json 默认 profile 配置
 - 已实现：`check` 会输出 per-profile preflight blocker / warning，提前暴露 system store 缺失或 probe 失败等切换阻塞因素
 - 已实现：profile 快照会记录保存时的来源平台与 system store 名称，`check` 会在跨平台 / 跨 store 使用时给出兼容性 warning
 - 已实现：`doctor` / 桌面端会汇总所有已保存 profile 的 readiness inventory，直接区分 ready / warning / blocked
+- 已实现：`doctor` / 桌面端会按依赖 store 汇总已保存 profile，直接看出哪个 store 正在挡住多少 profile
 - 已实现：`bundle` 脱敏诊断包导出，适合收集平台状态、profile 元数据和审计尾部用于实机排障
 - 已实现：CLI 和桌面端的当前状态传输已做脱敏，不再把 `auth.json` 原文暴露给 UI 或 `detect/current` JSON 输出
 - 已实现：`recover` 显式恢复未完成切换事务，并在 `doctor` / 桌面端暴露 pending transaction 状态

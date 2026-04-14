@@ -116,6 +116,16 @@ type DashboardData = {
       source_operating_system: string;
       source_system_store_name?: string | null;
     }>;
+    store_usage: Array<{
+      store_name: string;
+      profile_count: number;
+      ready_count: number;
+      warning_count: number;
+      blocked_count: number;
+      supported?: boolean | null;
+      available?: boolean | null;
+      detail: string;
+    }>;
     recommended_actions: string[];
   };
   profiles: ProfileMeta[];
@@ -582,6 +592,42 @@ export function App() {
             </div>
           ))}
         </div>
+        {!!dashboard?.doctor.store_usage.length && (
+          <div className="store-list">
+            {dashboard.doctor.store_usage.map((usage) => (
+              <div className="store-card" key={usage.store_name}>
+                <div className="profile-topline">
+                  <strong>{usage.store_name}</strong>
+                  <span
+                    className={`badge ${
+                      usage.blocked_count > 0
+                        ? "badge-blocked"
+                        : usage.warning_count > 0
+                          ? "badge-warning"
+                          : "badge-ready"
+                    }`}
+                  >
+                    {usage.blocked_count > 0
+                      ? "blocked"
+                      : usage.warning_count > 0
+                        ? "warning"
+                        : "ready"}
+                  </span>
+                </div>
+                <p className="muted">
+                  profiles={usage.profile_count} ready={usage.ready_count} warning=
+                  {usage.warning_count} blocked={usage.blocked_count}
+                </p>
+                <p className="muted">
+                  supported=
+                  {usage.supported == null ? "-" : String(usage.supported)} available=
+                  {usage.available == null ? "-" : String(usage.available)}
+                </p>
+                <p className="muted">{usage.detail}</p>
+              </div>
+            ))}
+          </div>
+        )}
         {!!dashboard?.doctor.profile_readiness.length && (
           <div className="store-list">
             {dashboard.doctor.profile_readiness.map((profile) => (
