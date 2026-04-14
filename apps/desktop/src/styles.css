@@ -276,6 +276,16 @@ button:disabled {
   color: #89f0ca;
 }
 
+.badge-warning {
+  background: rgba(255, 207, 112, 0.14);
+  color: #ffcf70;
+}
+
+.badge-blocked {
+  background: rgba(255, 144, 115, 0.16);
+  color: #ffd7ce;
+}
+
 .badge-idle {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(245, 242, 235, 0.86);
