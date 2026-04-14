@@ -100,6 +100,27 @@ logs/       脱敏审计日志
 config.json 默认 profile 配置
 ```
 
+### 自定义系统凭证发现规则
+
+管理器会先加载内置 discovery rules，再把 `config.json` 里的自定义规则追加进去。可用于适配未来官方 `service/account` 命名变化，而不必等待发版。
+
+示例：
+
+```json
+{
+  "default_profile_id": null,
+  "credential_discovery_rules": [
+    {
+      "name": "custom-openai",
+      "source_type": "chat_gpt",
+      "service": "custom-openai",
+      "account": "{account_id}",
+      "label": "Desktop Session"
+    }
+  ]
+}
+```
+
 ## 当前实现状态
 
 - 已实现：`auth.json` 文件型会话检测、最小快照保存、切换回滚、显式 `sync`、导出导入、Tauri UI 壳子

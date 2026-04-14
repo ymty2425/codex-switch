@@ -51,6 +51,7 @@
 
 - profile 元数据仓储
 - 默认 profile 配置
+- 自定义 discovery rules 配置
 - 当前绑定状态
 - 当前 live 会话与 active profile 的同步状态
 - 切换事务日志
@@ -87,6 +88,13 @@
 - 系统凭证引用与实际 secret 记录
 
 当 detector 命中系统凭证规则时，`DetectedSession` 会被标记为 `mixed`，并把发现到的系统条目一起纳入 live fingerprint。
+
+`CredentialDiscoveryRegistry` 的规则来源分为两层：
+
+- 内置标准规则
+- `config.json` 里的自定义 `credential_discovery_rules`
+
+manager 启动时会先加载标准规则，再把自定义规则追加进去。
 
 不会复制：
 

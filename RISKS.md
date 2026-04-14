@@ -30,6 +30,7 @@
 - 常见 `service/account` 组合可进入 mixed-mode 探测
 - 未被 registry 覆盖的官方条目仍可能漏检
 - Windows Credential Manager 的真实命名方式仍需在 Windows 环境里补齐验证
+- 自定义规则配置写错时不会命中条目，因此需要在 `detect` 或桌面端状态里验证规则是否真正生效
 
 ### 安全擦除只能最佳努力
 

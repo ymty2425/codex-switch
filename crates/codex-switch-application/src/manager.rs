@@ -11,9 +11,9 @@ use codex_switch_domain::{
     SwitchPhase, SwitchTransaction, traits::ProfileVault as _,
 };
 use codex_switch_platform::{
-    AuthJsonSessionDetector, CredentialDiscoveryRegistry, FileCredentialStore, GlobalSwitchLock,
-    LinuxKeyringCredentialStore, LocalProfileVault, MacKeychainCredentialStore, PathResolver,
-    WindowsCredentialStore,
+    AuthJsonSessionDetector, CredentialDiscoveryRegistry, CredentialDiscoveryRule,
+    FileCredentialStore, GlobalSwitchLock, LinuxKeyringCredentialStore, LocalProfileVault,
+    MacKeychainCredentialStore, PathResolver, WindowsCredentialStore,
     fs_secure::{atomic_write, ensure_dir, list_json_files, secure_delete},
     locator::AppPaths,
 };
@@ -74,6 +74,8 @@ pub struct CheckReport {
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct AppConfig {
     default_profile_id: Option<ProfileId>,
+    #[serde(default)]
+    credential_discovery_rules: Vec<CredentialDiscoveryRule>,
 }
 
 pub struct ManagerService {
@@ -97,25 +99,42 @@ impl std::fmt::Debug for ManagerService {
 impl ManagerService {
     pub fn new(options: ManagerOptions) -> Result<Self> {
         let paths = PathResolver::discover(options.codex_home_override, options.data_dir_override)?;
+        let registry = Self::load_discovery_registry(&paths.config_file)?;
+        Self::from_parts(
+            paths,
+            options.local_passphrase,
+            registry,
+            default_system_stores(),
+            default_system_stores(),
+        )
+    }
+
+    fn from_parts(
+        paths: AppPaths,
+        local_passphrase: Option<SecretString>,
+        registry: CredentialDiscoveryRegistry,
+        system_stores: Vec<Box<dyn OfficialCredentialStore>>,
+        detector_system_stores: Vec<Box<dyn OfficialCredentialStore>>,
+    ) -> Result<Self> {
         let file_store = FileCredentialStore::new(paths.codex_home.clone());
         let detector = AuthJsonSessionDetector::with_registry(
             file_store.clone(),
-            CredentialDiscoveryRegistry::default(),
-            default_system_stores(),
+            registry,
+            detector_system_stores,
         );
         let vault = LocalProfileVault::new(
             paths.profiles_dir.clone(),
             paths.vault_dir.clone(),
             paths.exports_dir.clone(),
-            options.local_passphrase.clone(),
+            local_passphrase.clone(),
         );
         let service = Self {
             paths,
             detector,
             file_store,
             vault,
-            system_stores: default_system_stores(),
-            local_encryption_enabled: options.local_passphrase.is_some(),
+            system_stores,
+            local_encryption_enabled: local_passphrase.is_some(),
         };
         service.ensure_layout()?;
         Ok(service)
@@ -536,12 +555,26 @@ impl ManagerService {
     }
 
     fn set_default_profile(&self, default_profile_id: Option<ProfileId>) -> Result<()> {
+        let mut config = self.read_config()?;
         let profiles = self.read_profiles()?;
         for mut profile in profiles {
             profile.is_default = Some(profile.id) == default_profile_id;
             self.vault.write_profile_meta(&profile)?;
         }
-        self.write_config(&AppConfig { default_profile_id })
+        config.default_profile_id = default_profile_id;
+        self.write_config(&config)
+    }
+
+    fn load_discovery_registry(config_file: &Path) -> Result<CredentialDiscoveryRegistry> {
+        if !config_file.exists() {
+            return Ok(CredentialDiscoveryRegistry::default());
+        }
+
+        let contents = fs::read_to_string(config_file)?;
+        let config: AppConfig = serde_json::from_str(&contents)?;
+        let mut rules = CredentialDiscoveryRegistry::standard_rules();
+        rules.extend(config.credential_discovery_rules);
+        Ok(CredentialDiscoveryRegistry::new(rules))
     }
 
     fn append_audit(&self, action: &str, detail: &str) -> Result<()> {
@@ -749,12 +782,57 @@ mod tests {
     use std::fs;
 
     use base64::Engine as _;
+    use codex_switch_domain::{
+        CredentialMode, CredentialRef, OfficialCredentialStore, Result as DomainResult,
+        SecretRecord, SwitchError,
+    };
     use codex_switch_platform::inspect::inspect_auth_json;
+    use codex_switch_platform::{CredentialDiscoveryRegistry, CredentialDiscoveryRule};
     use secrecy::SecretString;
     use tempfile::tempdir;
 
     use super::*;
     use codex_switch_domain::SourceType;
+
+    #[derive(Debug)]
+    struct MockStore {
+        available: Vec<SecretRecord>,
+    }
+
+    impl OfficialCredentialStore for MockStore {
+        fn kind(&self) -> CredentialMode {
+            CredentialMode::System
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn read(&self, refs: &[CredentialRef]) -> DomainResult<Vec<SecretRecord>> {
+            let mut matched = Vec::new();
+            for wanted in refs {
+                if let Some(record) =
+                    self.available.iter().find(|record| &record.reference == wanted)
+                {
+                    matched.push(record.clone());
+                }
+            }
+
+            if matched.is_empty() {
+                Err(SwitchError::CredentialUnavailable("No matching system credential".to_string()))
+            } else {
+                Ok(matched)
+            }
+        }
+
+        fn write(&self, _records: &[SecretRecord]) -> DomainResult<()> {
+            Ok(())
+        }
+
+        fn delete(&self, _refs: &[CredentialRef]) -> DomainResult<()> {
+            Ok(())
+        }
+    }
 
     fn sample_auth(account: &str, last_refresh: &str) -> String {
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -771,6 +849,23 @@ mod tests {
                 }}
             }}"#
         )
+    }
+
+    fn manager_with_registry(
+        codex_home: PathBuf,
+        app_home: PathBuf,
+        registry: CredentialDiscoveryRegistry,
+        detector_records: Vec<SecretRecord>,
+    ) -> ManagerService {
+        let paths = PathResolver::discover(Some(codex_home), Some(app_home)).expect("paths");
+        ManagerService::from_parts(
+            paths,
+            None,
+            registry,
+            vec![Box::new(MockStore { available: Vec::new() })],
+            vec![Box::new(MockStore { available: detector_records })],
+        )
+        .expect("manager")
     }
 
     #[test]
@@ -987,6 +1082,101 @@ mod tests {
         assert!(current.active_profile.is_none());
         assert_eq!(current.live_session.live_fingerprint, live_before.live_fingerprint);
         assert_eq!(profiles.iter().filter(|profile| profile.is_default).count(), 1);
+    }
+
+    #[test]
+    fn loads_custom_discovery_rules_from_config_for_detection() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+        fs::create_dir_all(&app_home).expect("app_home");
+        fs::write(
+            app_home.join("config.json"),
+            serde_json::to_vec_pretty(&AppConfig {
+                default_profile_id: None,
+                credential_discovery_rules: vec![CredentialDiscoveryRule {
+                    name: "custom-openai".to_string(),
+                    source_type: Some(SourceType::ChatGpt),
+                    service: "custom-openai".to_string(),
+                    account: "{account_id}".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                }],
+            })
+            .expect("config"),
+        )
+        .expect("write config");
+
+        let registry = ManagerService::load_discovery_registry(&app_home.join("config.json"))
+            .expect("registry");
+        let manager = manager_with_registry(
+            codex_home,
+            app_home,
+            registry,
+            vec![SecretRecord {
+                reference: CredentialRef {
+                    service: "custom-openai".to_string(),
+                    account: "acct-custom".to_string(),
+                    label: Some("Desktop Session".to_string()),
+                },
+                secret: SecretString::new("custom-secret-token".into()),
+            }],
+        );
+
+        let detected = manager.detect().expect("detected");
+
+        assert_eq!(detected.credential_mode, CredentialMode::Mixed);
+        assert_eq!(detected.system_entries.len(), 1);
+        assert_eq!(detected.system_entries[0].reference.service, "custom-openai");
+    }
+
+    #[test]
+    fn set_default_profile_preserves_custom_discovery_rules_in_config() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+        fs::create_dir_all(&app_home).expect("app_home");
+        let original_rule = CredentialDiscoveryRule {
+            name: "custom-openai".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        };
+        fs::write(
+            app_home.join("config.json"),
+            serde_json::to_vec_pretty(&AppConfig {
+                default_profile_id: None,
+                credential_discovery_rules: vec![original_rule.clone()],
+            })
+            .expect("config"),
+        )
+        .expect("write config");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        manager.set_default_profile_by_name("alpha").expect("set default");
+        let config = manager.read_config().expect("config");
+
+        assert_eq!(config.credential_discovery_rules, vec![original_rule]);
+        assert!(config.default_profile_id.is_some());
     }
 
     #[test]
