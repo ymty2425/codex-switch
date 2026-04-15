@@ -384,6 +384,19 @@ fn print_doctor(report: &DoctorReport) {
             txn.started_at.to_rfc3339()
         );
     }
+    println!(
+        "Validation: {:?}  active_store={} ready_profiles={} warnings={} blocked={} mixed_profiles={}",
+        report.validation.status,
+        report.validation.active_store_name.as_deref().unwrap_or("-"),
+        report.validation.ready_profile_count,
+        report.validation.warning_profile_count,
+        report.validation.blocked_profile_count,
+        report.validation.mixed_profile_count
+    );
+    println!("{}", report.validation.detail);
+    for step in &report.validation.next_steps {
+        println!("Validation step: {step}");
+    }
     if !report.profile_readiness.is_empty() {
         println!("Profile inventory:");
         for profile in &report.profile_readiness {

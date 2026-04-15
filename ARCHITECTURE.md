@@ -64,6 +64,7 @@
 - 平台就绪度诊断输出
 - 全量 profile readiness inventory，可在 `doctor` 中汇总每个 profile 的 ready / warning / blocked 状态
 - store usage summary，可在 `doctor` 中按依赖 store 汇总 profile 数量与 blocked / warning 分布
+- platform validation summary，可在 `doctor` 中直接判断当前机器适合跑 blocked / file-only / mixed-mode 哪一种验收路径
 - 系统凭证 discovery trace，可见每条规则的展开和查找状态
 - non-destructive switch probes，可见锁文件、数据目录和同目录 rename 的就绪度
 - 未完成切换事务的可见性与显式恢复
@@ -129,6 +130,12 @@ manager 启动时会先加载标准规则，再把自定义规则追加进去。
 - 对没有 system store 依赖的 profile 归并到 `file_only`
 - 汇总每个 store 的 ready / warning / blocked 数量
 - 当某个 store 当前挡住 profile 时，recommendation 会点名该 store
+
+`doctor_report` 还会生成 platform validation summary：
+
+- `blocked`：当前机器还不适合进入平台验收，通常是 live session 或 switch probes 还没准备好
+- `file_only`：当前机器适合先做文件型会话验收，但 mixed-mode 仍需要目标 system store 可用
+- `ready`：当前机器适合做 file-backed 和 mixed-mode 验收，并会给出建议的下一步验证动作
 
 不会复制：
 
