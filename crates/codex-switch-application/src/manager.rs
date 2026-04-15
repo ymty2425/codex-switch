@@ -478,32 +478,31 @@ impl ManagerService {
         let snapshot = self.load_snapshot(profile.id)?;
         let binding = self.read_binding()?;
 
-        let (status, detail, drifted) = if binding.active_profile_id == Some(profile.id) {
+        let (healthy_detail, drifted, is_active) = if binding.active_profile_id == Some(profile.id)
+        {
             let live = self.detect()?;
             if live.live_fingerprint == snapshot.manifest.vault_fingerprint {
-                (
-                    HealthStatus::Healthy,
-                    "Active profile matches the current live session.".to_string(),
-                    false,
-                )
+                ("Active profile matches the current live session.".to_string(), false, true)
             } else {
                 (
-                    HealthStatus::Drifted,
                     "The active profile differs from the current live session. Run `sync` to capture the refresh.".to_string(),
+                    true,
                     true,
                 )
             }
         } else {
             (
-                HealthStatus::Healthy,
                 "Stored snapshot is structurally valid. No live comparison was possible because the profile is not active.".to_string(),
+                false,
                 false,
             )
         };
 
         let preflight = self.build_profile_preflight(&snapshot, drifted);
-        profile.health =
-            ProfileHealth { status, detail: detail.clone(), checked_at: Some(Utc::now()) };
+        let health =
+            self.derive_checked_profile_health(&preflight, drifted, is_active, &healthy_detail);
+        let detail = health.detail.clone();
+        profile.health = health;
         self.vault.write_profile_meta(&profile)?;
         Ok(CheckReport { profile, detail, drifted, preflight })
     }
@@ -727,11 +726,8 @@ impl ManagerService {
         }
         profile.name = self.unique_import_name(&profile.name)?;
         profile.is_default = false;
-        profile.health = ProfileHealth {
-            status: HealthStatus::Healthy,
-            detail: "Imported profile archive is ready to use.".to_string(),
-            checked_at: Some(Utc::now()),
-        };
+        let preflight = self.build_profile_preflight(&snapshot, false);
+        profile.health = self.derive_imported_profile_health(&preflight);
         self.vault.save(&profile, &snapshot)?;
         self.append_audit("import", &format!("Imported profile '{}'", profile.name))?;
         Ok(profile)
@@ -1384,6 +1380,67 @@ impl ManagerService {
         }
     }
 
+    fn derive_checked_profile_health(
+        &self,
+        preflight: &ProfilePreflightReport,
+        drifted: bool,
+        is_active: bool,
+        healthy_detail: &str,
+    ) -> ProfileHealth {
+        let status = if !preflight.ready {
+            HealthStatus::Invalid
+        } else if drifted {
+            HealthStatus::Drifted
+        } else {
+            HealthStatus::Healthy
+        };
+
+        let detail = match status {
+            HealthStatus::Invalid => {
+                let prefix = if is_active {
+                    "Active profile is not ready to switch on this machine."
+                } else {
+                    "Profile is not ready to switch on this machine."
+                };
+                self.compose_detail(prefix, preflight)
+            }
+            HealthStatus::Drifted | HealthStatus::Healthy => {
+                self.compose_detail(healthy_detail, preflight)
+            }
+            HealthStatus::Missing | HealthStatus::Unknown => {
+                self.compose_detail(healthy_detail, preflight)
+            }
+        };
+
+        ProfileHealth { status, detail, checked_at: Some(Utc::now()) }
+    }
+
+    fn derive_imported_profile_health(&self, preflight: &ProfilePreflightReport) -> ProfileHealth {
+        let status = if preflight.ready { HealthStatus::Healthy } else { HealthStatus::Invalid };
+        let prefix = if preflight.ready {
+            "Imported profile archive is ready to use on this machine."
+        } else {
+            "Imported profile archive is not ready on this machine."
+        };
+        let detail = self.compose_detail(prefix, preflight);
+        ProfileHealth { status, detail, checked_at: Some(Utc::now()) }
+    }
+
+    fn compose_detail(&self, prefix: &str, preflight: &ProfilePreflightReport) -> String {
+        if !preflight.ready {
+            if let Some(blocker) = preflight.blockers.first() {
+                return format!("{prefix} Blocker: {blocker}");
+            }
+            return format!("{prefix} {}", preflight.detail);
+        }
+
+        if let Some(warning) = preflight.warnings.first() {
+            return format!("{prefix} Warning: {warning}");
+        }
+
+        prefix.to_string()
+    }
+
     fn recent_audit_entries(&self, limit: usize) -> Result<Vec<String>> {
         let log = self.read_audit_log()?;
         let mut lines = log
@@ -2002,6 +2059,8 @@ mod tests {
 
         assert!(!report.preflight.ready);
         assert_eq!(report.preflight.required_system_entries, 1);
+        assert_eq!(report.profile.health.status, HealthStatus::Invalid);
+        assert!(report.profile.health.detail.contains("not ready to switch on this machine"));
         assert!(
             report
                 .preflight
@@ -2141,6 +2200,95 @@ mod tests {
                 .any(|warning| warning.contains("macos_keychain")
                     && warning.contains("linux_keyring"))
         );
+        assert_eq!(report.profile.health.status, HealthStatus::Healthy);
+        assert!(report.profile.health.detail.contains("Warning:"));
+    }
+
+    #[test]
+    fn import_profile_marks_blocked_snapshot_as_invalid() {
+        let temp = tempdir().expect("tempdir");
+        let writer_codex_home = temp.path().join("writer-codex-home");
+        let writer_app_home = temp.path().join("writer-app-home");
+        let checker_codex_home = temp.path().join("checker-codex-home");
+        let checker_app_home = temp.path().join("checker-app-home");
+        fs::create_dir_all(&writer_codex_home).expect("writer_codex_home");
+        fs::create_dir_all(&checker_codex_home).expect("checker_codex_home");
+        fs::write(
+            writer_codex_home.join("auth.json"),
+            sample_auth("acct-custom", "2026-04-13T06:00:00Z"),
+        )
+        .expect("auth");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+
+        let writer = manager_with_store_mode(
+            writer_codex_home,
+            writer_app_home,
+            registry.clone(),
+            vec![system_record.clone()],
+            vec![system_record.clone()],
+            "mock_system_store",
+            "mock_system_store",
+            true,
+        );
+        writer
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+        let archive = writer
+            .export_profile("alpha", SecretString::new("export-pass".into()), None)
+            .expect("export");
+
+        fs::write(
+            checker_codex_home.join("auth.json"),
+            sample_auth("acct-fallback", "2026-04-13T07:00:00Z"),
+        )
+        .expect("checker auth");
+        let checker = manager_with_store_mode(
+            checker_codex_home,
+            checker_app_home,
+            registry,
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+
+        let imported = checker
+            .import_profile(&archive, SecretString::new("export-pass".into()))
+            .expect("import");
+
+        assert_eq!(imported.health.status, HealthStatus::Invalid);
+        assert!(
+            imported
+                .health
+                .detail
+                .contains("Imported profile archive is not ready on this machine")
+        );
+        let persisted = checker
+            .list_profiles()
+            .expect("profiles")
+            .into_iter()
+            .find(|profile| profile.id == imported.id)
+            .expect("persisted");
+        assert_eq!(persisted.health.status, HealthStatus::Invalid);
     }
 
     #[test]

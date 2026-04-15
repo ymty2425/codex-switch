@@ -46,6 +46,7 @@ cargo test -p codex-switch-application
 - `doctor` 的 discovery trace 应正确区分 matched / missing_input / lookup_missed
 - `doctor` 的 switch probes 应报告数据目录写入、锁获取与同目录原子替换能力
 - `check` 应为目标 profile 输出 preflight blocker / warning，并在 system store 缺失时阻止 mixed profile 被判定为 ready
+- `check/import` 应把最近一次本机 preflight 结果回写到 `profile.health`，包括 blocked 状态和 warning 摘要
 - 新保存的 snapshot 应记录来源平台 provenance；旧 snapshot 在反序列化时应默认回退到 `unknown`
 - 导出再导入后的 profile 应保留 snapshot provenance，并在来源 store 与当前 store 不同时给出 warning
 - `doctor` 应输出所有已保存 profile 的 readiness inventory，并在 blocked profile 存在时给出对应建议

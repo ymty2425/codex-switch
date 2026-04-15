@@ -44,6 +44,7 @@
 - `use_profile`
 - `check_profile`
   - 当前除 drift 检查外，还会执行 profile 级 preflight
+  - preflight 的 blocker / warning 会同步回写到 `profile.health`
 - `sync_active_profile`
 - `rename_profile`
 - `delete_profile`
@@ -51,6 +52,7 @@
 - `export_diagnostic_bundle`
 - `recover_pending_transactions`
 - `import_profile`
+  - 导入后会立即按当前机器重新做一次 preflight，并写回导入 profile 的健康状态
 
 这层同时管理：
 
