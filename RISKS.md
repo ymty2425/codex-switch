@@ -40,6 +40,7 @@
 - `profile.health` 现在会回写最近一次 `check/import` 的本机 preflight 结论，但它仍然只是最近一次本地判断，不代表后续环境不会变化
 - snapshot provenance 记录的是保存当时的来源平台与 store，可用于兼容性提醒，但不能单独证明跨平台导入后的官方会话一定可用
 - `doctor` 的 profile inventory 复用的是同一套本地 preflight 规则，所以它适合做整机筛查，不应被理解成官方在线验活结果
+- `doctor` 的 platform validation summary 也是本地 readiness 判断，它适合安排实机验收顺序，不代表该平台上的官方服务端一定接受当前会话
 - `doctor` 的 store usage summary 也是从已保存 snapshot 反推依赖关系；如果 profile 元数据过旧，它展示的是“已知依赖”，不是官方当前完整依赖图
 
 ### 安全擦除只能最佳努力

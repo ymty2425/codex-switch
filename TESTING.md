@@ -51,6 +51,7 @@ cargo test -p codex-switch-application
 - 导出再导入后的 profile 应保留 snapshot provenance，并在来源 store 与当前 store 不同时给出 warning
 - `doctor` 应输出所有已保存 profile 的 readiness inventory，并在 blocked profile 存在时给出对应建议
 - `doctor` 应输出 store usage summary，并在某个 store 挡住 profile 时给出点名该 store 的建议
+- `doctor` 应输出 platform validation summary，明确区分当前机器是 blocked / file_only / ready 哪种验收状态
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI

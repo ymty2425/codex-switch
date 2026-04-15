@@ -157,6 +157,26 @@ pub struct DoctorStoreUsageSummary {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoctorValidationStatus {
+    Ready,
+    FileOnly,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorValidationSummary {
+    pub status: DoctorValidationStatus,
+    pub detail: String,
+    pub active_store_name: Option<String>,
+    pub ready_profile_count: usize,
+    pub warning_profile_count: usize,
+    pub blocked_profile_count: usize,
+    pub mixed_profile_count: usize,
+    pub next_steps: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DoctorReport {
     pub operating_system: String,
@@ -171,6 +191,7 @@ pub struct DoctorReport {
     pub recovery: RecoveryStatus,
     pub profile_readiness: Vec<DoctorProfileReadiness>,
     pub store_usage: Vec<DoctorStoreUsageSummary>,
+    pub validation: DoctorValidationSummary,
     pub recommended_actions: Vec<String>,
 }
 
@@ -569,6 +590,13 @@ impl ManagerService {
         let profile_readiness =
             self.build_doctor_profile_readiness(&binding, live_detection.as_ref().ok())?;
         let store_usage = Self::build_doctor_store_usage(&profile_readiness, &stores);
+        let validation = self.build_doctor_validation_summary(
+            auth_file_exists,
+            &live_session,
+            &switch_probes,
+            &recovery,
+            &profile_readiness,
+        );
         let recommended_actions = self.build_doctor_recommendations(
             auth_file_exists,
             &live_session,
@@ -578,6 +606,7 @@ impl ManagerService {
             &recovery,
             &profile_readiness,
             &store_usage,
+            &validation,
         );
 
         Ok(DoctorReport {
@@ -597,6 +626,7 @@ impl ManagerService {
             recovery,
             profile_readiness,
             store_usage,
+            validation,
             recommended_actions,
         })
     }
@@ -884,6 +914,7 @@ impl ManagerService {
         recovery: &RecoveryStatus,
         profile_readiness: &[DoctorProfileReadiness],
         store_usage: &[DoctorStoreUsageSummary],
+        validation: &DoctorValidationSummary,
     ) -> Vec<String> {
         let mut recommendations = Vec::new();
 
@@ -906,6 +937,21 @@ impl ManagerService {
                 "No supported system credential store is currently available, so file-backed sessions will be the most reliable path."
                     .to_string(),
             );
+        }
+
+        match validation.status {
+            DoctorValidationStatus::Ready => recommendations.push(
+                "This machine is ready for platform validation. Run a switch round-trip, then export a diagnostic bundle as evidence."
+                    .to_string(),
+            ),
+            DoctorValidationStatus::FileOnly => recommendations.push(
+                "This machine is ready for file-backed validation, but mixed-mode validation should wait for a machine with the target system credential store."
+                    .to_string(),
+            ),
+            DoctorValidationStatus::Blocked => recommendations.push(
+                "This machine is not ready for a validation pass yet. Clear the blocking auth or switch-probe issues first."
+                    .to_string(),
+            ),
         }
 
         recommendations.push(
@@ -978,6 +1024,136 @@ impl ManagerService {
         }
 
         recommendations
+    }
+
+    fn build_doctor_validation_summary(
+        &self,
+        auth_file_exists: bool,
+        live_session: &DoctorLiveSessionStatus,
+        switch_probes: &SwitchProbeReport,
+        recovery: &RecoveryStatus,
+        profile_readiness: &[DoctorProfileReadiness],
+    ) -> DoctorValidationSummary {
+        let ready_profile_count =
+            profile_readiness.iter().filter(|profile| profile.status == "ready").count();
+        let warning_profile_count =
+            profile_readiness.iter().filter(|profile| profile.status == "warning").count();
+        let blocked_profile_count =
+            profile_readiness.iter().filter(|profile| profile.status == "blocked").count();
+        let mixed_profile_count = profile_readiness
+            .iter()
+            .filter(|profile| profile.credential_mode != codex_switch_domain::CredentialMode::File)
+            .count();
+        let active_store_name = self.current_system_store_name();
+        let switch_ready = switch_probes.data_dir_write.ok
+            && switch_probes.lock_acquire.ok
+            && switch_probes.atomic_swap.ok;
+        let status = if !auth_file_exists || !live_session.detected || !switch_ready {
+            DoctorValidationStatus::Blocked
+        } else if active_store_name.is_some() {
+            DoctorValidationStatus::Ready
+        } else {
+            DoctorValidationStatus::FileOnly
+        };
+
+        let detail = match status {
+            DoctorValidationStatus::Ready => {
+                if mixed_profile_count > 0 {
+                    format!(
+                        "This machine is ready for file-backed and mixed-mode validation. {} saved profile(s) currently depend on a system credential store.",
+                        mixed_profile_count
+                    )
+                } else {
+                    "This machine is ready for a file-backed validation pass, and a system credential store is available for mixed-mode testing when needed."
+                        .to_string()
+                }
+            }
+            DoctorValidationStatus::FileOnly => {
+                "This machine is ready for file-backed validation, but no active system credential store is available for mixed-mode verification."
+                    .to_string()
+            }
+            DoctorValidationStatus::Blocked => {
+                "This machine is not ready for a validation pass yet because the live session or switch prerequisites are incomplete."
+                    .to_string()
+            }
+        };
+
+        let mut next_steps = Vec::new();
+        match status {
+            DoctorValidationStatus::Blocked => {
+                if !auth_file_exists {
+                    next_steps.push(
+                        "Complete one official login on this machine so auth.json exists before recording validation evidence."
+                            .to_string(),
+                    );
+                }
+                if !live_session.detected {
+                    next_steps.push(
+                        "Re-run doctor after the official client has a detectable live session on this machine."
+                            .to_string(),
+                    );
+                }
+                if !switch_ready {
+                    next_steps.push(
+                        "Fix the failing switch probes before running profile-switch validation on this machine."
+                            .to_string(),
+                    );
+                }
+                if recovery.pending_count > 0 {
+                    next_steps.push(
+                        "Run recover so interrupted switch state does not pollute platform validation results."
+                            .to_string(),
+                    );
+                }
+            }
+            DoctorValidationStatus::FileOnly => {
+                next_steps.push(
+                    "Use this machine for file-backed save/use/check/sync validation first."
+                        .to_string(),
+                );
+                next_steps.push(
+                    "Export a diagnostic bundle after the file-backed validation pass so the results can be compared across platforms."
+                        .to_string(),
+                );
+                if mixed_profile_count > 0 {
+                    next_steps.push(format!(
+                        "{mixed_profile_count} mixed-mode profile(s) still need validation on a machine where the target system credential store is available."
+                    ));
+                }
+            }
+            DoctorValidationStatus::Ready => {
+                next_steps.push(
+                    "Run a save -> use -> use-back switch round-trip on this machine and confirm doctor stays green."
+                        .to_string(),
+                );
+                next_steps.push(
+                    "Export a diagnostic bundle after the switch pass to preserve the validation evidence for this platform."
+                        .to_string(),
+                );
+                if mixed_profile_count > 0 {
+                    next_steps.push(format!(
+                        "Include at least one mixed-mode profile in the validation pass because {mixed_profile_count} saved profile(s) depend on system credentials."
+                    ));
+                }
+                if warning_profile_count > 0 {
+                    next_steps.push(
+                        "Review warning profiles with check <name> before counting them as fully validated."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
+        DoctorValidationSummary {
+            status,
+            detail,
+            active_store_name,
+            ready_profile_count,
+            warning_profile_count,
+            blocked_profile_count,
+            mixed_profile_count,
+            next_steps,
+        }
     }
 
     fn build_doctor_profile_readiness(
@@ -2919,6 +3095,122 @@ mod tests {
                 .iter()
                 .any(|action| { action.contains("macos_keychain") && action.contains("blocked") })
         );
+    }
+
+    #[test]
+    fn doctor_report_marks_validation_as_blocked_without_live_session() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::default(),
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert_eq!(report.validation.status, DoctorValidationStatus::Blocked);
+        assert!(report.validation.detail.contains("not ready"));
+        assert!(
+            report
+                .validation
+                .next_steps
+                .iter()
+                .any(|step| { step.contains("official login") || step.contains("live session") })
+        );
+    }
+
+    #[test]
+    fn doctor_report_marks_validation_as_file_only_without_system_store() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::default(),
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert_eq!(report.validation.status, DoctorValidationStatus::FileOnly);
+        assert_eq!(report.validation.active_store_name, None);
+        assert_eq!(report.validation.mixed_profile_count, 0);
+        assert!(report.validation.detail.contains("file-backed"));
+    }
+
+    #[test]
+    fn doctor_report_marks_validation_as_ready_when_mixed_mode_can_be_verified() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home,
+            registry,
+            vec![system_record.clone()],
+            vec![system_record],
+            "linux_keyring",
+            "linux_keyring",
+            true,
+        );
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert_eq!(report.validation.status, DoctorValidationStatus::Ready);
+        assert_eq!(report.validation.active_store_name.as_deref(), Some("linux_keyring"));
+        assert_eq!(report.validation.mixed_profile_count, 1);
+        assert!(report.validation.next_steps.iter().any(|step| step.contains("diagnostic bundle")));
+        assert!(report.validation.next_steps.iter().any(|step| step.contains("mixed")));
     }
 
     #[test]

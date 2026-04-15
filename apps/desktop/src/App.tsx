@@ -126,6 +126,16 @@ type DashboardData = {
       available?: boolean | null;
       detail: string;
     }>;
+    validation: {
+      status: "ready" | "file_only" | "blocked";
+      detail: string;
+      active_store_name?: string | null;
+      ready_profile_count: number;
+      warning_profile_count: number;
+      blocked_profile_count: number;
+      mixed_profile_count: number;
+      next_steps: string[];
+    };
     recommended_actions: string[];
   };
   profiles: ProfileMeta[];
@@ -576,6 +586,32 @@ export function App() {
               {String(dashboard?.doctor.switch_probes.atomic_swap.ok ?? false)}
             </p>
           </div>
+          <div className="doctor-card">
+            <div className="stat-label">Validation</div>
+            <div className="profile-topline">
+              <strong>{dashboard?.doctor.validation.status ?? "unknown"}</strong>
+              <span
+                className={`badge ${
+                  dashboard?.doctor.validation.status === "ready"
+                    ? "badge-ready"
+                    : dashboard?.doctor.validation.status === "file_only"
+                      ? "badge-warning"
+                      : "badge-blocked"
+                }`}
+              >
+                {dashboard?.doctor.validation.active_store_name ?? "file-backed"}
+              </span>
+            </div>
+            <p className="muted">
+              {dashboard?.doctor.validation.detail ?? "No validation readiness detail."}
+            </p>
+            <p className="muted">
+              ready={dashboard?.doctor.validation.ready_profile_count ?? 0} warning=
+              {dashboard?.doctor.validation.warning_profile_count ?? 0} blocked=
+              {dashboard?.doctor.validation.blocked_profile_count ?? 0} mixed=
+              {dashboard?.doctor.validation.mixed_profile_count ?? 0}
+            </p>
+          </div>
         </div>
         <div className="store-list">
           {dashboard?.doctor.stores.map((store) => (
@@ -673,6 +709,15 @@ export function App() {
             {dashboard.doctor.recommended_actions.map((action) => (
               <p className="muted" key={action}>
                 {action}
+              </p>
+            ))}
+          </div>
+        )}
+        {!!dashboard?.doctor.validation.next_steps.length && (
+          <div className="doctor-actions">
+            {dashboard.doctor.validation.next_steps.map((step) => (
+              <p className="muted" key={step}>
+                {step}
               </p>
             ))}
           </div>
