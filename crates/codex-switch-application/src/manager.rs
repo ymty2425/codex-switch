@@ -157,7 +157,7 @@ pub struct DoctorStoreUsageSummary {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DoctorValidationStatus {
     Ready,
@@ -178,6 +178,16 @@ pub struct DoctorValidationSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DoctorPlatformEvidence {
+    pub operating_system: String,
+    pub evidence_count: usize,
+    pub latest_recorded_at: Option<chrono::DateTime<Utc>>,
+    pub latest_validation_status: Option<DoctorValidationStatus>,
+    pub latest_store_name: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DoctorReport {
     pub operating_system: String,
     pub codex_home: String,
@@ -192,6 +202,7 @@ pub struct DoctorReport {
     pub profile_readiness: Vec<DoctorProfileReadiness>,
     pub store_usage: Vec<DoctorStoreUsageSummary>,
     pub validation: DoctorValidationSummary,
+    pub validation_evidence: Vec<DoctorPlatformEvidence>,
     pub recommended_actions: Vec<String>,
 }
 
@@ -259,6 +270,20 @@ struct AppConfig {
     default_profile_id: Option<ProfileId>,
     #[serde(default)]
     credential_discovery_rules: Vec<CredentialDiscoveryRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ValidationEvidenceRecord {
+    recorded_at: chrono::DateTime<Utc>,
+    operating_system: String,
+    validation_status: DoctorValidationStatus,
+    active_store_name: Option<String>,
+    live_session_detected: bool,
+    bundle_path: String,
+    ready_profile_count: usize,
+    warning_profile_count: usize,
+    blocked_profile_count: usize,
+    mixed_profile_count: usize,
 }
 
 pub struct ManagerService {
@@ -590,6 +615,7 @@ impl ManagerService {
         let profile_readiness =
             self.build_doctor_profile_readiness(&binding, live_detection.as_ref().ok())?;
         let store_usage = Self::build_doctor_store_usage(&profile_readiness, &stores);
+        let validation_evidence = self.build_validation_evidence()?;
         let validation = self.build_doctor_validation_summary(
             auth_file_exists,
             &live_session,
@@ -607,6 +633,7 @@ impl ManagerService {
             &profile_readiness,
             &store_usage,
             &validation,
+            &validation_evidence,
         );
 
         Ok(DoctorReport {
@@ -627,6 +654,7 @@ impl ManagerService {
             profile_readiness,
             store_usage,
             validation,
+            validation_evidence,
             recommended_actions,
         })
     }
@@ -686,6 +714,7 @@ impl ManagerService {
         });
         let payload = serde_json::to_vec_pretty(&bundle)?;
         atomic_write(&destination, &payload)?;
+        self.record_validation_evidence(&bundle, &destination)?;
         self.append_audit(
             "bundle",
             &format!("Exported diagnostic bundle to {}", destination.display()),
@@ -779,6 +808,7 @@ impl ManagerService {
         ensure_dir(&self.paths.profiles_dir)?;
         ensure_dir(&self.paths.vault_dir)?;
         ensure_dir(&self.paths.exports_dir)?;
+        ensure_dir(&self.paths.validation_dir)?;
         ensure_dir(&self.paths.tx_dir)?;
         ensure_dir(&self.paths.locks_dir)?;
         ensure_dir(&self.paths.logs_dir)?;
@@ -915,6 +945,7 @@ impl ManagerService {
         profile_readiness: &[DoctorProfileReadiness],
         store_usage: &[DoctorStoreUsageSummary],
         validation: &DoctorValidationSummary,
+        validation_evidence: &[DoctorPlatformEvidence],
     ) -> Vec<String> {
         let mut recommendations = Vec::new();
 
@@ -1023,7 +1054,62 @@ impl ManagerService {
             ));
         }
 
+        let missing_platforms = validation_evidence
+            .iter()
+            .filter(|entry| entry.evidence_count == 0)
+            .map(|entry| entry.operating_system.as_str())
+            .collect::<Vec<_>>();
+        if !missing_platforms.is_empty() {
+            recommendations.push(format!(
+                "Validation evidence is still missing for: {}.",
+                missing_platforms.join(", ")
+            ));
+        }
+
         recommendations
+    }
+
+    fn build_validation_evidence(&self) -> Result<Vec<DoctorPlatformEvidence>> {
+        use std::collections::BTreeMap;
+
+        let records = self.read_validation_evidence_records()?;
+        let mut grouped: BTreeMap<String, Vec<ValidationEvidenceRecord>> = BTreeMap::new();
+        for record in records {
+            grouped.entry(record.operating_system.clone()).or_default().push(record);
+        }
+        for platform in ["macos", "windows", "linux"] {
+            grouped.entry(platform.to_string()).or_default();
+        }
+
+        Ok(grouped
+            .into_iter()
+            .map(|(operating_system, mut records)| {
+                records.sort_by_key(|record| record.recorded_at);
+                let latest = records.last();
+                let detail = if let Some(latest) = latest {
+                    format!(
+                        "Latest evidence captured at {} with status {:?} via {}.",
+                        latest.recorded_at.to_rfc3339(),
+                        latest.validation_status,
+                        latest.active_store_name.as_deref().unwrap_or("file-backed")
+                    )
+                } else {
+                    format!(
+                        "No validation evidence has been recorded for {} yet.",
+                        operating_system
+                    )
+                };
+
+                DoctorPlatformEvidence {
+                    operating_system,
+                    evidence_count: records.len(),
+                    latest_recorded_at: latest.map(|record| record.recorded_at),
+                    latest_validation_status: latest.map(|record| record.validation_status),
+                    latest_store_name: latest.and_then(|record| record.active_store_name.clone()),
+                    detail,
+                }
+            })
+            .collect())
     }
 
     fn build_doctor_validation_summary(
@@ -1301,6 +1387,40 @@ impl ManagerService {
                 }
             })
             .collect()
+    }
+
+    fn record_validation_evidence(
+        &self,
+        bundle: &DiagnosticBundle,
+        destination: &Path,
+    ) -> Result<()> {
+        let record = ValidationEvidenceRecord {
+            recorded_at: bundle.generated_at,
+            operating_system: bundle.doctor.operating_system.clone(),
+            validation_status: bundle.doctor.validation.status,
+            active_store_name: bundle.doctor.validation.active_store_name.clone(),
+            live_session_detected: bundle.doctor.live_session.detected,
+            bundle_path: destination.display().to_string(),
+            ready_profile_count: bundle.doctor.validation.ready_profile_count,
+            warning_profile_count: bundle.doctor.validation.warning_profile_count,
+            blocked_profile_count: bundle.doctor.validation.blocked_profile_count,
+            mixed_profile_count: bundle.doctor.validation.mixed_profile_count,
+        };
+        let record_path = self.paths.validation_dir.join(format!(
+            "validation-evidence-{}-{}.json",
+            record.recorded_at.format("%Y%m%dT%H%M%SZ"),
+            Uuid::new_v4()
+        ));
+        atomic_write(&record_path, &serde_json::to_vec_pretty(&record)?)
+    }
+
+    fn read_validation_evidence_records(&self) -> Result<Vec<ValidationEvidenceRecord>> {
+        let mut records = Vec::new();
+        for path in list_json_files(&self.paths.validation_dir)? {
+            let contents = fs::read_to_string(path)?;
+            records.push(serde_json::from_str(&contents)?);
+        }
+        Ok(records)
     }
 
     fn run_switch_probes(&self) -> SwitchProbeReport {
@@ -3307,6 +3427,108 @@ mod tests {
         assert!(!contents.contains("refresh-acct-alpha"));
         assert!(!contents.contains("access-acct-alpha"));
         assert!(!contents.contains("\"contents\""));
+    }
+
+    #[test]
+    fn export_diagnostic_bundle_records_validation_evidence() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home.clone(),
+            CredentialDiscoveryRegistry::default(),
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+
+        let bundle_path = manager.export_diagnostic_bundle(None).expect("bundle");
+        let evidence_files = list_json_files(&app_home.join("validation")).expect("evidence files");
+
+        assert_eq!(evidence_files.len(), 1);
+        let evidence_json = fs::read_to_string(&evidence_files[0]).expect("evidence json");
+        let evidence: serde_json::Value =
+            serde_json::from_str(&evidence_json).expect("evidence value");
+        assert_eq!(evidence["validation_status"], "file_only");
+        assert!(evidence_json.contains(&bundle_path.display().to_string()));
+        assert!(evidence_json.contains(std::env::consts::OS));
+    }
+
+    #[test]
+    fn doctor_report_includes_validation_evidence_matrix_after_bundle_export() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::default(),
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+        manager.export_diagnostic_bundle(None).expect("bundle");
+
+        let report = manager.doctor_report().expect("doctor");
+        let current_platform = report
+            .validation_evidence
+            .iter()
+            .find(|entry| entry.operating_system == std::env::consts::OS)
+            .expect("current platform");
+
+        assert_eq!(report.validation_evidence.len(), 3);
+        assert_eq!(current_platform.evidence_count, 1);
+        assert_eq!(
+            current_platform.latest_validation_status,
+            Some(DoctorValidationStatus::FileOnly)
+        );
+        assert!(current_platform.detail.contains("Latest evidence captured"));
+    }
+
+    #[test]
+    fn doctor_report_recommends_missing_validation_platform_evidence() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::default(),
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+        manager.export_diagnostic_bundle(None).expect("bundle");
+
+        let report = manager.doctor_report().expect("doctor");
+        let missing_platforms = ["macos", "windows", "linux"]
+            .into_iter()
+            .filter(|platform| *platform != std::env::consts::OS)
+            .collect::<Vec<_>>();
+
+        assert!(report.recommended_actions.iter().any(|action| {
+            action.contains("Validation evidence is still missing")
+                && missing_platforms.iter().any(|platform| action.contains(platform))
+        }));
     }
 
     #[test]

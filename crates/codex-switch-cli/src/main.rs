@@ -397,6 +397,26 @@ fn print_doctor(report: &DoctorReport) {
     for step in &report.validation.next_steps {
         println!("Validation step: {step}");
     }
+    if !report.validation_evidence.is_empty() {
+        println!("Validation evidence:");
+        for evidence in &report.validation_evidence {
+            println!(
+                "Platform {}  captures={} latest_status={} latest_store={} recorded_at={}  {}",
+                evidence.operating_system,
+                evidence.evidence_count,
+                evidence
+                    .latest_validation_status
+                    .map(|status| format!("{status:?}"))
+                    .unwrap_or_else(|| "-".to_string()),
+                evidence.latest_store_name.as_deref().unwrap_or("-"),
+                evidence
+                    .latest_recorded_at
+                    .map(|timestamp| timestamp.to_rfc3339())
+                    .unwrap_or_else(|| "-".to_string()),
+                evidence.detail
+            );
+        }
+    }
     if !report.profile_readiness.is_empty() {
         println!("Profile inventory:");
         for profile in &report.profile_readiness {

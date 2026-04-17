@@ -52,6 +52,7 @@ cargo test -p codex-switch-application
 - `doctor` 应输出所有已保存 profile 的 readiness inventory，并在 blocked profile 存在时给出对应建议
 - `doctor` 应输出 store usage summary，并在某个 store 挡住 profile 时给出点名该 store 的建议
 - `doctor` 应输出 platform validation summary，明确区分当前机器是 blocked / file_only / ready 哪种验收状态
+- `bundle` 导出后应自动落下一条 validation evidence，`doctor` 应按 macOS / Windows / Linux 汇总 evidence 覆盖情况
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI
@@ -93,3 +94,4 @@ cargo check -p codex-switch-desktop
 5. 运行 `sync`
 6. 导出并重新导入 profile
 7. 模拟切换中断后重启，再确认恢复逻辑生效
+8. 每个平台完成一次验收后执行 `bundle`，确认 `doctor` 会把该平台标记为已有 validation evidence

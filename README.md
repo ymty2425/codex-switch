@@ -15,6 +15,7 @@
 - 提供 Rust CLI 和极简 Tauri 桌面端壳子，共用同一套后端服务
 - `detect/current/doctor` 的对外输出默认只暴露脱敏摘要，不直接暴露原始认证内容
 - 可导出脱敏诊断包，方便做三平台实机验收与问题归档
+- `doctor` 会汇总本机已经记录过的 validation evidence，直接看出 macOS / Windows / Linux 哪些平台还缺验收证据
 
 ## 重要边界
 
@@ -81,6 +82,7 @@ npm --workspace apps/desktop run tauri dev
 - 平台就绪度面板，显示 discovery trace，帮助定位规则是命中、缺少输入还是查找落空
 - 平台就绪度面板，显示待恢复事务并允许手动执行恢复
 - 平台就绪度面板，运行非破坏性切换探针，检查数据目录写入、全局锁和同目录原子替换
+- 平台就绪度面板，展示跨平台 validation evidence 覆盖情况，方便安排下一台机器的实机验收
 - 当前会话是否需要同步的状态提示
 - profile 列表
 - 保存当前账号
@@ -106,6 +108,7 @@ npm --workspace apps/desktop run tauri dev
 profiles/   profile 元数据
 vault/      敏感快照
 exports/    导出包
+validation/ 平台验证证据记录
 tx/         切换事务与备份
 locks/      全局文件锁
 logs/       脱敏审计日志
