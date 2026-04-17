@@ -136,6 +136,14 @@ type DashboardData = {
       mixed_profile_count: number;
       next_steps: string[];
     };
+    validation_evidence: Array<{
+      operating_system: string;
+      evidence_count: number;
+      latest_recorded_at?: string | null;
+      latest_validation_status?: "ready" | "file_only" | "blocked" | null;
+      latest_store_name?: string | null;
+      detail: string;
+    }>;
     recommended_actions: string[];
   };
   profiles: ProfileMeta[];
@@ -660,6 +668,38 @@ export function App() {
                   {usage.available == null ? "-" : String(usage.available)}
                 </p>
                 <p className="muted">{usage.detail}</p>
+              </div>
+            ))}
+          </div>
+        )}
+        {!!dashboard?.doctor.validation_evidence.length && (
+          <div className="store-list">
+            {dashboard.doctor.validation_evidence.map((evidence) => (
+              <div className="store-card" key={evidence.operating_system}>
+                <div className="profile-topline">
+                  <strong>{evidence.operating_system}</strong>
+                  <span
+                    className={`badge ${
+                      evidence.evidence_count === 0
+                        ? "badge-idle"
+                        : evidence.latest_validation_status === "blocked"
+                          ? "badge-blocked"
+                          : evidence.latest_validation_status === "file_only"
+                            ? "badge-warning"
+                            : "badge-ready"
+                    }`}
+                  >
+                    {evidence.evidence_count === 0
+                      ? "missing"
+                      : evidence.latest_validation_status ?? "captured"}
+                  </span>
+                </div>
+                <p className="muted">
+                  captures={evidence.evidence_count} store=
+                  {evidence.latest_store_name ?? "file-backed"} recorded=
+                  {evidence.latest_recorded_at ?? "-"}
+                </p>
+                <p className="muted">{evidence.detail}</p>
               </div>
             ))}
           </div>
