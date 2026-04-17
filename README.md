@@ -17,6 +17,7 @@
 - 可导出脱敏诊断包，方便做三平台实机验收与问题归档
 - `doctor` 会汇总本机已经记录过的 validation evidence，直接看出 macOS / Windows / Linux 哪些平台还缺验收证据
 - `doctor` 还会给出 validation coverage 摘要，区分 file-backed 是否已留证、mixed-mode 是否已留证，以及下一轮最该补的验证目标
+- validation coverage 还会判断 evidence 是否已经因为 profile catalog 变化而过期，避免旧验证结果被误当成当前状态
 
 ## 重要边界
 

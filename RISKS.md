@@ -44,6 +44,7 @@
 - `doctor` 的 store usage summary 也是从已保存 snapshot 反推依赖关系；如果 profile 元数据过旧，它展示的是“已知依赖”，不是官方当前完整依赖图
 - validation evidence 记录的是“本地导出过一次诊断包”的事实，不是自动化证明该平台全部测试步骤都已经完整执行；它更适合做验收留痕和缺口盘点
 - validation coverage summary 依赖于本地已经记录下来的 evidence records；如果某次真实验收做了但没有导出 bundle，它仍会被当作“尚未留证”
+- validation freshness 依赖 profile catalog 指纹；如果未来需要按更细粒度区分“哪些 profile 变了”，还要继续细化这套指纹模型
 
 ### 安全擦除只能最佳努力
 

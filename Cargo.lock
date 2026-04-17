@@ -458,9 +458,11 @@ dependencies = [
  "chrono",
  "codex-switch-domain",
  "codex-switch-platform",
+ "hex",
  "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "uuid",
 ]
