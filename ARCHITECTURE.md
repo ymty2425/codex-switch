@@ -66,6 +66,7 @@
 - store usage summary，可在 `doctor` 中按依赖 store 汇总 profile 数量与 blocked / warning 分布
 - platform validation summary，可在 `doctor` 中直接判断当前机器适合跑 blocked / file-only / mixed-mode 哪一种验收路径
 - validation evidence matrix，可在 `doctor` 中按 macOS / Windows / Linux 汇总已经落盘的验收证据
+- validation coverage summary，可在 `doctor` 中判断 file-backed / mixed-mode 是否已经有留痕，并给出下一轮推荐验证目标
 - 系统凭证 discovery trace，可见每条规则的展开和查找状态
 - non-destructive switch probes，可见锁文件、数据目录和同目录 rename 的就绪度
 - 未完成切换事务的可见性与显式恢复
@@ -147,6 +148,13 @@ manager 启动时会先加载标准规则，再把自定义规则追加进去。
 - 导出的 bundle 路径
 
 后续 `doctor_report` 会把这些记录折叠成一个 3 平台 evidence matrix，帮助判断还缺哪台机器的实机结果。
+
+`doctor_report` 还会基于这些 evidence records 再计算 coverage summary：
+
+- `file_backed_recorded`：是否至少留过一次 file-backed 验证证据
+- `mixed_mode_required`：当前已保存 profile 是否真的需要 mixed-mode 验收
+- `mixed_mode_recorded`：是否已经留过至少一次 mixed-mode 验证证据
+- `next_target`：当前最值得优先补的下一轮验收动作
 
 不会复制：
 
