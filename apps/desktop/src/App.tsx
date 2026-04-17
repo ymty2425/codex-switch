@@ -136,6 +136,16 @@ type DashboardData = {
       mixed_profile_count: number;
       next_steps: string[];
     };
+    validation_coverage: {
+      file_backed_recorded: boolean;
+      mixed_mode_required: boolean;
+      mixed_mode_recorded: boolean;
+      covered_platform_count: number;
+      total_platform_count: number;
+      missing_platforms: string[];
+      detail: string;
+      next_target: string;
+    };
     validation_evidence: Array<{
       operating_system: string;
       evidence_count: number;
@@ -620,6 +630,43 @@ export function App() {
               {dashboard?.doctor.validation.mixed_profile_count ?? 0}
             </p>
           </div>
+          <div className="doctor-card">
+            <div className="stat-label">Coverage</div>
+            <div className="profile-topline">
+              <strong>
+                {dashboard?.doctor.validation_coverage.covered_platform_count ?? 0}/
+                {dashboard?.doctor.validation_coverage.total_platform_count ?? 3}
+              </strong>
+              <span
+                className={`badge ${
+                  dashboard?.doctor.validation_coverage.mixed_mode_required &&
+                  !dashboard?.doctor.validation_coverage.mixed_mode_recorded
+                    ? "badge-warning"
+                    : dashboard?.doctor.validation_coverage.file_backed_recorded
+                      ? "badge-ready"
+                      : "badge-blocked"
+                }`}
+              >
+                {dashboard?.doctor.validation_coverage.mixed_mode_required
+                  ? dashboard?.doctor.validation_coverage.mixed_mode_recorded
+                    ? "mixed covered"
+                    : "mixed pending"
+                  : "file-only"}
+              </span>
+            </div>
+            <p className="muted">
+              file-backed={String(
+                dashboard?.doctor.validation_coverage.file_backed_recorded ?? false,
+              )}{" "}
+              mixed-required=
+              {String(dashboard?.doctor.validation_coverage.mixed_mode_required ?? false)}{" "}
+              mixed-recorded=
+              {String(dashboard?.doctor.validation_coverage.mixed_mode_recorded ?? false)}
+            </p>
+            <p className="muted">
+              {dashboard?.doctor.validation_coverage.detail ?? "No validation coverage detail."}
+            </p>
+          </div>
         </div>
         <div className="store-list">
           {dashboard?.doctor.stores.map((store) => (
@@ -704,6 +751,18 @@ export function App() {
             ))}
           </div>
         )}
+        <div className="doctor-actions">
+          <p className="muted">
+            {dashboard?.doctor.validation_coverage.next_target ??
+              "No validation next target yet."}
+          </p>
+          {!!dashboard?.doctor.validation_coverage.missing_platforms.length && (
+            <p className="muted">
+              Missing platforms:{" "}
+              {dashboard?.doctor.validation_coverage.missing_platforms.join(", ")}
+            </p>
+          )}
+        </div>
         {!!dashboard?.doctor.profile_readiness.length && (
           <div className="store-list">
             {dashboard.doctor.profile_readiness.map((profile) => (

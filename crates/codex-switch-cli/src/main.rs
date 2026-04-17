@@ -397,6 +397,22 @@ fn print_doctor(report: &DoctorReport) {
     for step in &report.validation.next_steps {
         println!("Validation step: {step}");
     }
+    println!(
+        "Validation coverage: file_backed_recorded={} mixed_mode_required={} mixed_mode_recorded={} covered_platforms={}/{}",
+        report.validation_coverage.file_backed_recorded,
+        report.validation_coverage.mixed_mode_required,
+        report.validation_coverage.mixed_mode_recorded,
+        report.validation_coverage.covered_platform_count,
+        report.validation_coverage.total_platform_count
+    );
+    println!("{}", report.validation_coverage.detail);
+    println!("Validation next target: {}", report.validation_coverage.next_target);
+    if !report.validation_coverage.missing_platforms.is_empty() {
+        println!(
+            "Validation missing platforms: {}",
+            report.validation_coverage.missing_platforms.join(", ")
+        );
+    }
     if !report.validation_evidence.is_empty() {
         println!("Validation evidence:");
         for evidence in &report.validation_evidence {

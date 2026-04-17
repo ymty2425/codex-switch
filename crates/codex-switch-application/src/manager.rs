@@ -178,6 +178,18 @@ pub struct DoctorValidationSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DoctorValidationCoverageSummary {
+    pub file_backed_recorded: bool,
+    pub mixed_mode_required: bool,
+    pub mixed_mode_recorded: bool,
+    pub covered_platform_count: usize,
+    pub total_platform_count: usize,
+    pub missing_platforms: Vec<String>,
+    pub detail: String,
+    pub next_target: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DoctorPlatformEvidence {
     pub operating_system: String,
     pub evidence_count: usize,
@@ -202,6 +214,7 @@ pub struct DoctorReport {
     pub profile_readiness: Vec<DoctorProfileReadiness>,
     pub store_usage: Vec<DoctorStoreUsageSummary>,
     pub validation: DoctorValidationSummary,
+    pub validation_coverage: DoctorValidationCoverageSummary,
     pub validation_evidence: Vec<DoctorPlatformEvidence>,
     pub recommended_actions: Vec<String>,
 }
@@ -623,6 +636,8 @@ impl ManagerService {
             &recovery,
             &profile_readiness,
         );
+        let validation_coverage =
+            self.build_validation_coverage(&validation, &self.read_validation_evidence_records()?);
         let recommended_actions = self.build_doctor_recommendations(
             auth_file_exists,
             &live_session,
@@ -633,6 +648,7 @@ impl ManagerService {
             &profile_readiness,
             &store_usage,
             &validation,
+            &validation_coverage,
             &validation_evidence,
         );
 
@@ -654,6 +670,7 @@ impl ManagerService {
             profile_readiness,
             store_usage,
             validation,
+            validation_coverage,
             validation_evidence,
             recommended_actions,
         })
@@ -945,6 +962,7 @@ impl ManagerService {
         profile_readiness: &[DoctorProfileReadiness],
         store_usage: &[DoctorStoreUsageSummary],
         validation: &DoctorValidationSummary,
+        validation_coverage: &DoctorValidationCoverageSummary,
         validation_evidence: &[DoctorPlatformEvidence],
     ) -> Vec<String> {
         let mut recommendations = Vec::new();
@@ -969,6 +987,8 @@ impl ManagerService {
                     .to_string(),
             );
         }
+
+        recommendations.push(validation_coverage.next_target.clone());
 
         match validation.status {
             DoctorValidationStatus::Ready => recommendations.push(
@@ -1110,6 +1130,94 @@ impl ManagerService {
                 }
             })
             .collect())
+    }
+
+    fn build_validation_coverage(
+        &self,
+        validation: &DoctorValidationSummary,
+        records: &[ValidationEvidenceRecord],
+    ) -> DoctorValidationCoverageSummary {
+        use std::collections::BTreeSet;
+
+        let tracked_platforms = ["macos", "windows", "linux"];
+        let covered_platforms =
+            records.iter().map(|record| record.operating_system.clone()).collect::<BTreeSet<_>>();
+        let missing_platforms = tracked_platforms
+            .into_iter()
+            .filter(|platform| !covered_platforms.contains(*platform))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let file_backed_recorded = records.iter().any(|record| {
+            matches!(
+                record.validation_status,
+                DoctorValidationStatus::FileOnly | DoctorValidationStatus::Ready
+            )
+        });
+        let mixed_mode_required = validation.mixed_profile_count > 0;
+        let mixed_mode_recorded =
+            records.iter().any(|record| record.validation_status == DoctorValidationStatus::Ready);
+        let current_os = std::env::consts::OS.to_string();
+        let current_platform_recorded = covered_platforms.contains(&current_os);
+
+        let detail = if !file_backed_recorded {
+            "No file-backed validation evidence has been recorded yet.".to_string()
+        } else if mixed_mode_required && !mixed_mode_recorded {
+            "File-backed validation evidence exists, but mixed-mode evidence is still missing."
+                .to_string()
+        } else if !missing_platforms.is_empty() {
+            format!(
+                "Validation evidence covers current file-backed{} requirements, but platform evidence is still missing for: {}.",
+                if mixed_mode_required { " and mixed-mode" } else { "" },
+                missing_platforms.join(", ")
+            )
+        } else {
+            format!(
+                "Validation evidence covers current file-backed{} requirements across all three platforms.",
+                if mixed_mode_required { " and mixed-mode" } else { "" }
+            )
+        };
+
+        let next_target = if !file_backed_recorded {
+            if validation.status == DoctorValidationStatus::Blocked {
+                "File-backed validation evidence is still missing. Unblock this machine or use another ready machine, then export a diagnostic bundle.".to_string()
+            } else {
+                "File-backed validation evidence is still missing. Run a file-backed validation pass on this machine and export a diagnostic bundle.".to_string()
+            }
+        } else if mixed_mode_required && !mixed_mode_recorded {
+            if validation.status == DoctorValidationStatus::Ready {
+                "This machine can close the mixed-mode evidence gap. Run a mixed-mode switch round-trip and export a diagnostic bundle.".to_string()
+            } else {
+                "Mixed-mode evidence is still missing. Use a machine with the target system credential store to run one mixed-mode validation pass and export a diagnostic bundle.".to_string()
+            }
+        } else if !missing_platforms.is_empty() {
+            if !current_platform_recorded && validation.status != DoctorValidationStatus::Blocked {
+                format!(
+                    "This machine can fill the missing {} evidence gap. Run a validation pass and export a diagnostic bundle.",
+                    current_os
+                )
+            } else {
+                format!(
+                    "Validation evidence is still missing for: {}. Use the next ready machine in that list to run a validation pass and export a diagnostic bundle.",
+                    missing_platforms.join(", ")
+                )
+            }
+        } else {
+            format!(
+                "Validation evidence covers current file-backed{} requirements across all three platforms.",
+                if mixed_mode_required { " and mixed-mode" } else { "" }
+            )
+        };
+
+        DoctorValidationCoverageSummary {
+            file_backed_recorded,
+            mixed_mode_required,
+            mixed_mode_recorded,
+            covered_platform_count: covered_platforms.len().min(3),
+            total_platform_count: 3,
+            missing_platforms,
+            detail,
+            next_target,
+        }
     }
 
     fn build_doctor_validation_summary(
@@ -2166,6 +2274,34 @@ mod tests {
             })],
         )
         .expect("manager")
+    }
+
+    fn write_validation_evidence(
+        app_home: &Path,
+        operating_system: &str,
+        validation_status: DoctorValidationStatus,
+        active_store_name: Option<&str>,
+    ) {
+        fs::create_dir_all(app_home.join("validation")).expect("validation dir");
+        let record = ValidationEvidenceRecord {
+            recorded_at: chrono::DateTime::parse_from_rfc3339("2026-04-17T08:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&Utc),
+            operating_system: operating_system.to_string(),
+            validation_status,
+            active_store_name: active_store_name.map(|value| value.to_string()),
+            live_session_detected: true,
+            bundle_path: format!("/tmp/{operating_system}-bundle.json"),
+            ready_profile_count: 1,
+            warning_profile_count: 0,
+            blocked_profile_count: 0,
+            mixed_profile_count: usize::from(validation_status == DoctorValidationStatus::Ready),
+        };
+        let path = app_home
+            .join("validation")
+            .join(format!("validation-evidence-{operating_system}.json"));
+        fs::write(path, serde_json::to_vec_pretty(&record).expect("record json"))
+            .expect("record write");
     }
 
     #[test]
@@ -3529,6 +3665,164 @@ mod tests {
             action.contains("Validation evidence is still missing")
                 && missing_platforms.iter().any(|platform| action.contains(platform))
         }));
+    }
+
+    #[test]
+    fn doctor_report_flags_missing_file_backed_validation_coverage() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home,
+            CredentialDiscoveryRegistry::default(),
+            Vec::new(),
+            Vec::new(),
+            "mock_system_store",
+            "mock_system_store",
+            false,
+        );
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(!report.validation_coverage.file_backed_recorded);
+        assert!(!report.validation_coverage.mixed_mode_required);
+        assert!(!report.validation_coverage.mixed_mode_recorded);
+        assert!(report.validation_coverage.missing_platforms.len() == 3);
+        assert!(
+            report
+                .validation_coverage
+                .next_target
+                .contains("file-backed validation pass on this machine")
+        );
+    }
+
+    #[test]
+    fn doctor_report_flags_missing_mixed_mode_validation_coverage() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home.clone(),
+            registry,
+            vec![system_record.clone()],
+            vec![system_record],
+            "linux_keyring",
+            "linux_keyring",
+            true,
+        );
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        write_validation_evidence(
+            &app_home,
+            std::env::consts::OS,
+            DoctorValidationStatus::FileOnly,
+            None,
+        );
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(report.validation_coverage.file_backed_recorded);
+        assert!(report.validation_coverage.mixed_mode_required);
+        assert!(!report.validation_coverage.mixed_mode_recorded);
+        assert!(report.validation_coverage.next_target.contains("mixed-mode evidence gap"));
+    }
+
+    #[test]
+    fn doctor_report_marks_validation_coverage_complete_when_all_platforms_are_recorded() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-custom", "2026-04-13T06:00:00Z"))
+            .expect("auth");
+
+        let registry = CredentialDiscoveryRegistry::new(vec![CredentialDiscoveryRule {
+            name: "custom-account-id".to_string(),
+            source_type: Some(SourceType::ChatGpt),
+            service: "custom-openai".to_string(),
+            account: "{account_id}".to_string(),
+            label: Some("Desktop Session".to_string()),
+        }]);
+        let system_record = SecretRecord {
+            reference: CredentialRef {
+                service: "custom-openai".to_string(),
+                account: "acct-custom".to_string(),
+                label: Some("Desktop Session".to_string()),
+            },
+            secret: SecretString::new("custom-secret-token".into()),
+        };
+        let manager = manager_with_store_mode(
+            codex_home,
+            app_home.clone(),
+            registry,
+            vec![system_record.clone()],
+            vec![system_record],
+            "linux_keyring",
+            "linux_keyring",
+            true,
+        );
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        write_validation_evidence(
+            &app_home,
+            "macos",
+            DoctorValidationStatus::Ready,
+            Some("mac_keychain"),
+        );
+        write_validation_evidence(&app_home, "windows", DoctorValidationStatus::FileOnly, None);
+        write_validation_evidence(&app_home, "linux", DoctorValidationStatus::FileOnly, None);
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(report.validation_coverage.file_backed_recorded);
+        assert!(report.validation_coverage.mixed_mode_recorded);
+        assert!(report.validation_coverage.mixed_mode_required);
+        assert!(report.validation_coverage.missing_platforms.is_empty());
+        assert!(report.validation_coverage.detail.contains("covers current"));
     }
 
     #[test]

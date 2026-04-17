@@ -16,6 +16,7 @@
 - `detect/current/doctor` 的对外输出默认只暴露脱敏摘要，不直接暴露原始认证内容
 - 可导出脱敏诊断包，方便做三平台实机验收与问题归档
 - `doctor` 会汇总本机已经记录过的 validation evidence，直接看出 macOS / Windows / Linux 哪些平台还缺验收证据
+- `doctor` 还会给出 validation coverage 摘要，区分 file-backed 是否已留证、mixed-mode 是否已留证，以及下一轮最该补的验证目标
 
 ## 重要边界
 

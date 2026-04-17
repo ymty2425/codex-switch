@@ -43,6 +43,7 @@
 - `doctor` 的 platform validation summary 也是本地 readiness 判断，它适合安排实机验收顺序，不代表该平台上的官方服务端一定接受当前会话
 - `doctor` 的 store usage summary 也是从已保存 snapshot 反推依赖关系；如果 profile 元数据过旧，它展示的是“已知依赖”，不是官方当前完整依赖图
 - validation evidence 记录的是“本地导出过一次诊断包”的事实，不是自动化证明该平台全部测试步骤都已经完整执行；它更适合做验收留痕和缺口盘点
+- validation coverage summary 依赖于本地已经记录下来的 evidence records；如果某次真实验收做了但没有导出 bundle，它仍会被当作“尚未留证”
 
 ### 安全擦除只能最佳努力
 

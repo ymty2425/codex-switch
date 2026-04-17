@@ -53,6 +53,7 @@ cargo test -p codex-switch-application
 - `doctor` 应输出 store usage summary，并在某个 store 挡住 profile 时给出点名该 store 的建议
 - `doctor` 应输出 platform validation summary，明确区分当前机器是 blocked / file_only / ready 哪种验收状态
 - `bundle` 导出后应自动落下一条 validation evidence，`doctor` 应按 macOS / Windows / Linux 汇总 evidence 覆盖情况
+- `doctor` 还应输出 validation coverage summary，明确区分 file-backed 是否已留证、mixed-mode 是否仍缺口，以及下一轮推荐目标
 - 与真实 `auth.json` 结构一致的探测形状
 
 ### CLI
