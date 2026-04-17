@@ -143,6 +143,8 @@ type DashboardData = {
       covered_platform_count: number;
       total_platform_count: number;
       missing_platforms: string[];
+      stale: boolean;
+      stale_reason?: string | null;
       detail: string;
       next_target: string;
     };
@@ -639,15 +641,19 @@ export function App() {
               </strong>
               <span
                 className={`badge ${
-                  dashboard?.doctor.validation_coverage.mixed_mode_required &&
-                  !dashboard?.doctor.validation_coverage.mixed_mode_recorded
+                  dashboard?.doctor.validation_coverage.stale
+                    ? "badge-blocked"
+                    : dashboard?.doctor.validation_coverage.mixed_mode_required &&
+                        !dashboard?.doctor.validation_coverage.mixed_mode_recorded
                     ? "badge-warning"
                     : dashboard?.doctor.validation_coverage.file_backed_recorded
                       ? "badge-ready"
                       : "badge-blocked"
                 }`}
               >
-                {dashboard?.doctor.validation_coverage.mixed_mode_required
+                {dashboard?.doctor.validation_coverage.stale
+                  ? "stale"
+                  : dashboard?.doctor.validation_coverage.mixed_mode_required
                   ? dashboard?.doctor.validation_coverage.mixed_mode_recorded
                     ? "mixed covered"
                     : "mixed pending"
@@ -661,11 +667,15 @@ export function App() {
               mixed-required=
               {String(dashboard?.doctor.validation_coverage.mixed_mode_required ?? false)}{" "}
               mixed-recorded=
-              {String(dashboard?.doctor.validation_coverage.mixed_mode_recorded ?? false)}
+              {String(dashboard?.doctor.validation_coverage.mixed_mode_recorded ?? false)} stale=
+              {String(dashboard?.doctor.validation_coverage.stale ?? false)}
             </p>
             <p className="muted">
               {dashboard?.doctor.validation_coverage.detail ?? "No validation coverage detail."}
             </p>
+            {!!dashboard?.doctor.validation_coverage.stale_reason && (
+              <p className="muted">{dashboard.doctor.validation_coverage.stale_reason}</p>
+            )}
           </div>
         </div>
         <div className="store-list">

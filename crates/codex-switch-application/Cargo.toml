@@ -8,8 +8,10 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 codex-switch-domain = { path = "../codex-switch-domain" }
 codex-switch-platform = { path = "../codex-switch-platform" }
+hex = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }

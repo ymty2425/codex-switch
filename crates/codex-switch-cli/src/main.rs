@@ -398,14 +398,18 @@ fn print_doctor(report: &DoctorReport) {
         println!("Validation step: {step}");
     }
     println!(
-        "Validation coverage: file_backed_recorded={} mixed_mode_required={} mixed_mode_recorded={} covered_platforms={}/{}",
+        "Validation coverage: file_backed_recorded={} mixed_mode_required={} mixed_mode_recorded={} stale={} covered_platforms={}/{}",
         report.validation_coverage.file_backed_recorded,
         report.validation_coverage.mixed_mode_required,
         report.validation_coverage.mixed_mode_recorded,
+        report.validation_coverage.stale,
         report.validation_coverage.covered_platform_count,
         report.validation_coverage.total_platform_count
     );
     println!("{}", report.validation_coverage.detail);
+    if let Some(reason) = &report.validation_coverage.stale_reason {
+        println!("Validation stale reason: {reason}");
+    }
     println!("Validation next target: {}", report.validation_coverage.next_target);
     if !report.validation_coverage.missing_platforms.is_empty() {
         println!(

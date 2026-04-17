@@ -22,6 +22,7 @@ use codex_switch_platform::{
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Default)]
@@ -185,6 +186,8 @@ pub struct DoctorValidationCoverageSummary {
     pub covered_platform_count: usize,
     pub total_platform_count: usize,
     pub missing_platforms: Vec<String>,
+    pub stale: bool,
+    pub stale_reason: Option<String>,
     pub detail: String,
     pub next_target: String,
 }
@@ -297,6 +300,8 @@ struct ValidationEvidenceRecord {
     warning_profile_count: usize,
     blocked_profile_count: usize,
     mixed_profile_count: usize,
+    #[serde(default)]
+    profile_catalog_fingerprint: Option<String>,
 }
 
 pub struct ManagerService {
@@ -989,6 +994,9 @@ impl ManagerService {
         }
 
         recommendations.push(validation_coverage.next_target.clone());
+        if let Some(reason) = &validation_coverage.stale_reason {
+            recommendations.push(reason.clone());
+        }
 
         match validation.status {
             DoctorValidationStatus::Ready => recommendations.push(
@@ -1137,47 +1145,97 @@ impl ManagerService {
         validation: &DoctorValidationSummary,
         records: &[ValidationEvidenceRecord],
     ) -> DoctorValidationCoverageSummary {
-        use std::collections::BTreeSet;
+        use std::collections::{BTreeMap, BTreeSet};
 
         let tracked_platforms = ["macos", "windows", "linux"];
-        let covered_platforms =
-            records.iter().map(|record| record.operating_system.clone()).collect::<BTreeSet<_>>();
+        let current_catalog_fingerprint =
+            self.current_profile_catalog_fingerprint().unwrap_or_else(|_| "unknown".to_string());
+        let mut latest_by_platform = BTreeMap::new();
+        for record in records {
+            latest_by_platform
+                .entry(record.operating_system.clone())
+                .and_modify(|current: &mut ValidationEvidenceRecord| {
+                    if record.recorded_at > current.recorded_at {
+                        *current = record.clone();
+                    }
+                })
+                .or_insert_with(|| record.clone());
+        }
+        let fresh_platforms = latest_by_platform
+            .iter()
+            .filter_map(|(platform, record)| {
+                (record.profile_catalog_fingerprint.as_deref()
+                    == Some(current_catalog_fingerprint.as_str()))
+                .then_some(platform.clone())
+            })
+            .collect::<BTreeSet<_>>();
         let missing_platforms = tracked_platforms
             .into_iter()
-            .filter(|platform| !covered_platforms.contains(*platform))
+            .filter(|platform| !fresh_platforms.contains(*platform))
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let file_backed_recorded = records.iter().any(|record| {
-            matches!(
-                record.validation_status,
-                DoctorValidationStatus::FileOnly | DoctorValidationStatus::Ready
-            )
+        let file_backed_recorded = latest_by_platform.values().any(|record| {
+            record.profile_catalog_fingerprint.as_deref()
+                == Some(current_catalog_fingerprint.as_str())
+                && matches!(
+                    record.validation_status,
+                    DoctorValidationStatus::FileOnly | DoctorValidationStatus::Ready
+                )
         });
         let mixed_mode_required = validation.mixed_profile_count > 0;
-        let mixed_mode_recorded =
-            records.iter().any(|record| record.validation_status == DoctorValidationStatus::Ready);
+        let mixed_mode_recorded = latest_by_platform.values().any(|record| {
+            record.profile_catalog_fingerprint.as_deref()
+                == Some(current_catalog_fingerprint.as_str())
+                && record.validation_status == DoctorValidationStatus::Ready
+        });
+        let stale_platforms = latest_by_platform
+            .iter()
+            .filter_map(|(platform, record)| {
+                (record.profile_catalog_fingerprint.as_deref()
+                    != Some(current_catalog_fingerprint.as_str()))
+                .then_some(platform.clone())
+            })
+            .collect::<Vec<_>>();
+        let stale = !stale_platforms.is_empty();
+        let stale_reason = stale.then(|| {
+            format!(
+                "Latest evidence for {} predates the current saved profile catalog.",
+                stale_platforms.join(", ")
+            )
+        });
         let current_os = std::env::consts::OS.to_string();
-        let current_platform_recorded = covered_platforms.contains(&current_os);
+        let current_platform_recorded = fresh_platforms.contains(&current_os);
 
-        let detail = if !file_backed_recorded {
-            "No file-backed validation evidence has been recorded yet.".to_string()
+        let detail = if stale {
+            format!(
+                "Some recorded evidence is stale relative to the current saved profiles. {}",
+                stale_reason.as_deref().unwrap_or("")
+            )
+        } else if !file_backed_recorded {
+            "No current file-backed validation evidence has been recorded yet.".to_string()
         } else if mixed_mode_required && !mixed_mode_recorded {
-            "File-backed validation evidence exists, but mixed-mode evidence is still missing."
+            "Current file-backed validation evidence exists, but mixed-mode evidence is still missing."
                 .to_string()
         } else if !missing_platforms.is_empty() {
             format!(
-                "Validation evidence covers current file-backed{} requirements, but platform evidence is still missing for: {}.",
+                "Current validation evidence covers file-backed{} requirements, but platform evidence is still missing for: {}.",
                 if mixed_mode_required { " and mixed-mode" } else { "" },
                 missing_platforms.join(", ")
             )
         } else {
             format!(
-                "Validation evidence covers current file-backed{} requirements across all three platforms.",
+                "Current validation evidence covers file-backed{} requirements across all three platforms.",
                 if mixed_mode_required { " and mixed-mode" } else { "" }
             )
         };
 
-        let next_target = if !file_backed_recorded {
+        let next_target = if stale {
+            if validation.status == DoctorValidationStatus::Blocked {
+                "Recorded evidence is stale. Re-run validation on the next ready machine and export a fresh diagnostic bundle.".to_string()
+            } else {
+                "Recorded evidence is stale. Re-run validation on this machine and export a fresh diagnostic bundle.".to_string()
+            }
+        } else if !file_backed_recorded {
             if validation.status == DoctorValidationStatus::Blocked {
                 "File-backed validation evidence is still missing. Unblock this machine or use another ready machine, then export a diagnostic bundle.".to_string()
             } else {
@@ -1212,12 +1270,41 @@ impl ManagerService {
             file_backed_recorded,
             mixed_mode_required,
             mixed_mode_recorded,
-            covered_platform_count: covered_platforms.len().min(3),
+            covered_platform_count: fresh_platforms.len().min(3),
             total_platform_count: 3,
             missing_platforms,
+            stale,
+            stale_reason,
             detail,
             next_target,
         }
+    }
+
+    fn current_profile_catalog_fingerprint(&self) -> Result<String> {
+        let mut entries = Vec::new();
+        let mut profiles = self.read_profiles()?;
+        profiles.sort_by_key(|profile| profile.id);
+
+        for profile in profiles {
+            match self.load_snapshot(profile.id) {
+                Ok(snapshot) => entries.push(serde_json::json!({
+                    "profile_id": profile.id,
+                    "credential_mode": profile.credential_mode,
+                    "vault_fingerprint": snapshot.manifest.vault_fingerprint,
+                    "source_operating_system": snapshot.manifest.provenance.operating_system,
+                    "source_system_store_name": snapshot.manifest.provenance.system_store_name,
+                })),
+                Err(_) => entries.push(serde_json::json!({
+                    "profile_id": profile.id,
+                    "snapshot": "unavailable",
+                })),
+            }
+        }
+
+        let payload = serde_json::to_vec(&entries)?;
+        let mut hasher = Sha256::new();
+        hasher.update(payload);
+        Ok(hex::encode(hasher.finalize()))
     }
 
     fn build_doctor_validation_summary(
@@ -1513,6 +1600,7 @@ impl ManagerService {
             warning_profile_count: bundle.doctor.validation.warning_profile_count,
             blocked_profile_count: bundle.doctor.validation.blocked_profile_count,
             mixed_profile_count: bundle.doctor.validation.mixed_profile_count,
+            profile_catalog_fingerprint: Some(self.current_profile_catalog_fingerprint()?),
         };
         let record_path = self.paths.validation_dir.join(format!(
             "validation-evidence-{}-{}.json",
@@ -2281,6 +2369,7 @@ mod tests {
         operating_system: &str,
         validation_status: DoctorValidationStatus,
         active_store_name: Option<&str>,
+        profile_catalog_fingerprint: Option<&str>,
     ) {
         fs::create_dir_all(app_home.join("validation")).expect("validation dir");
         let record = ValidationEvidenceRecord {
@@ -2296,6 +2385,7 @@ mod tests {
             warning_profile_count: 0,
             blocked_profile_count: 0,
             mixed_profile_count: usize::from(validation_status == DoctorValidationStatus::Ready),
+            profile_catalog_fingerprint: profile_catalog_fingerprint.map(ToString::to_string),
         };
         let path = app_home
             .join("validation")
@@ -3598,6 +3688,40 @@ mod tests {
     }
 
     #[test]
+    fn export_diagnostic_bundle_records_profile_catalog_fingerprint() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home.clone()),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+
+        manager.export_diagnostic_bundle(None).expect("bundle");
+        let evidence_files = list_json_files(&app_home.join("validation")).expect("evidence files");
+        let evidence_json = fs::read_to_string(&evidence_files[0]).expect("evidence json");
+        let evidence: serde_json::Value =
+            serde_json::from_str(&evidence_json).expect("evidence value");
+
+        assert!(
+            evidence["profile_catalog_fingerprint"].as_str().is_some_and(|value| !value.is_empty())
+        );
+    }
+
+    #[test]
     fn doctor_report_includes_validation_evidence_matrix_after_bundle_export() {
         let temp = tempdir().expect("tempdir");
         let codex_home = temp.path().join("codex-home");
@@ -3755,6 +3879,7 @@ mod tests {
             std::env::consts::OS,
             DoctorValidationStatus::FileOnly,
             None,
+            Some(&manager.current_profile_catalog_fingerprint().expect("fingerprint")),
         );
 
         let report = manager.doctor_report().expect("doctor");
@@ -3812,9 +3937,22 @@ mod tests {
             "macos",
             DoctorValidationStatus::Ready,
             Some("mac_keychain"),
+            Some(&manager.current_profile_catalog_fingerprint().expect("fingerprint")),
         );
-        write_validation_evidence(&app_home, "windows", DoctorValidationStatus::FileOnly, None);
-        write_validation_evidence(&app_home, "linux", DoctorValidationStatus::FileOnly, None);
+        write_validation_evidence(
+            &app_home,
+            "windows",
+            DoctorValidationStatus::FileOnly,
+            None,
+            Some(&manager.current_profile_catalog_fingerprint().expect("fingerprint")),
+        );
+        write_validation_evidence(
+            &app_home,
+            "linux",
+            DoctorValidationStatus::FileOnly,
+            None,
+            Some(&manager.current_profile_catalog_fingerprint().expect("fingerprint")),
+        );
 
         let report = manager.doctor_report().expect("doctor");
 
@@ -3822,7 +3960,78 @@ mod tests {
         assert!(report.validation_coverage.mixed_mode_recorded);
         assert!(report.validation_coverage.mixed_mode_required);
         assert!(report.validation_coverage.missing_platforms.is_empty());
-        assert!(report.validation_coverage.detail.contains("covers current"));
+        assert!(report.validation_coverage.detail.contains("Current validation evidence covers"));
+    }
+
+    #[test]
+    fn doctor_report_marks_validation_coverage_stale_after_profile_catalog_changes() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home.clone()),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+        manager.export_diagnostic_bundle(None).expect("bundle");
+
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-beta", "2026-04-13T01:00:00Z"))
+            .expect("auth2");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "beta".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save2");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(report.validation_coverage.stale);
+        assert!(report.validation_coverage.detail.contains("recorded evidence is stale"));
+        assert!(report.validation_coverage.next_target.contains("Re-run validation"));
+    }
+
+    #[test]
+    fn doctor_report_keeps_validation_coverage_fresh_when_catalog_matches() {
+        let temp = tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let app_home = temp.path().join("app-home");
+        fs::create_dir_all(&codex_home).expect("codex_home");
+        fs::write(codex_home.join("auth.json"), sample_auth("acct-alpha", "2026-04-13T00:00:00Z"))
+            .expect("auth");
+
+        let manager = ManagerService::new(ManagerOptions {
+            codex_home_override: Some(codex_home),
+            data_dir_override: Some(app_home),
+            local_passphrase: None,
+        })
+        .expect("manager");
+        manager
+            .save_profile(SaveProfileRequest {
+                name: "alpha".to_string(),
+                note: None,
+                make_default: false,
+            })
+            .expect("save");
+        manager.export_diagnostic_bundle(None).expect("bundle");
+
+        let report = manager.doctor_report().expect("doctor");
+
+        assert!(!report.validation_coverage.stale);
+        assert_eq!(report.validation_coverage.stale_reason, None);
     }
 
     #[test]

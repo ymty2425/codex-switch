@@ -67,6 +67,7 @@
 - platform validation summary，可在 `doctor` 中直接判断当前机器适合跑 blocked / file-only / mixed-mode 哪一种验收路径
 - validation evidence matrix，可在 `doctor` 中按 macOS / Windows / Linux 汇总已经落盘的验收证据
 - validation coverage summary，可在 `doctor` 中判断 file-backed / mixed-mode 是否已经有留痕，并给出下一轮推荐验证目标
+- validation freshness，可在 `doctor` 中判断最新 evidence 是否仍然匹配当前 profile catalog
 - 系统凭证 discovery trace，可见每条规则的展开和查找状态
 - non-destructive switch probes，可见锁文件、数据目录和同目录 rename 的就绪度
 - 未完成切换事务的可见性与显式恢复
@@ -155,6 +156,7 @@ manager 启动时会先加载标准规则，再把自定义规则追加进去。
 - `mixed_mode_required`：当前已保存 profile 是否真的需要 mixed-mode 验收
 - `mixed_mode_recorded`：是否已经留过至少一次 mixed-mode 验证证据
 - `next_target`：当前最值得优先补的下一轮验收动作
+- `stale / stale_reason`：当前 evidence 是否已经落后于最新 profile catalog
 
 不会复制：
 
